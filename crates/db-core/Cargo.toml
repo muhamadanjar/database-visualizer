@@ -1,0 +1,20 @@
+[package]
+name = "db-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+db-types.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+sqlparser.workspace = true
+
+[dev-dependencies]
+db-postgres.workspace = true
+db-mysql.workspace = true
+sqlx.workspace = true
