@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/db-types", "crates/db-core", "crates/db-postgres", "crates/db-mysql"]
+exclude = ["vendor/sqlx-postgres", "vendor/sqlx-mysql"]
+members = ["crates/query-runtime", "services/api", "crates/db-types", "crates/db-core", "crates/db-postgres", "crates/db-mysql", "crates/desktop-runtime", "apps/desktop/src-tauri"]
 resolver = "2"
 
 [workspace.package]
@@ -19,8 +20,12 @@ futures-util = "=0.3.31"
 chrono = { version = "=0.4.45", features = ["serde"] }
 bigdecimal = "=0.4.10"
 sqlparser = "=0.63.0"
-sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json"] }
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }
 db-types = { path = "crates/db-types" }
 db-core = { path = "crates/db-core" }
 db-postgres = { path = "crates/db-postgres" }
 db-mysql = { path = "crates/db-mysql" }
+
+[patch.crates-io]
+sqlx-postgres = { path = "vendor/sqlx-postgres" }
+sqlx-mysql = { path = "vendor/sqlx-mysql" }

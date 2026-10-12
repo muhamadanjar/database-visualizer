@@ -1,8 +1,10 @@
 //! Session coordination and bounded query streams, independent of concrete drivers.
 mod runtime;
+mod script;
 use async_trait::async_trait;
 use db_types::*;
 pub use runtime::*;
+pub use script::*;
 use sqlparser::{
     ast::Statement,
     dialect::{MySqlDialect, PostgreSqlDialect},
@@ -22,8 +24,38 @@ pub trait ResultSink: Send {
 #[async_trait]
 pub trait BackendSession: Send {
     fn backend_id(&self) -> u64;
+    fn transaction_state(&self) -> TransactionState {
+        TransactionState::Unknown
+    }
     async fn execute(&mut self, sql: &str, sink: &mut dyn ResultSink)
     -> DbResult<ExecutionSummary>;
+    async fn execute_bound(
+        &mut self,
+        sql: &str,
+        parameters: &[String],
+        sink: &mut dyn ResultSink,
+    ) -> DbResult<ExecutionSummary> {
+        if !parameters.is_empty() {
+            return Err(DbError::new(
+                "UNSUPPORTED_PARAMETERS",
+                "query",
+                "Adapter does not support parameterized table filters",
+            ));
+        }
+        self.execute(sql, sink).await
+    }
+    async fn execute_typed(
+        &mut self,
+        _sql: &str,
+        _parameters: &[DbValue],
+        _sink: &mut dyn ResultSink,
+    ) -> DbResult<ExecutionSummary> {
+        Err(DbError::new(
+            "UNSUPPORTED_TYPED_PARAMETERS",
+            "query",
+            "Adapter does not support typed mutations",
+        ))
+    }
     async fn synchronize(&mut self) -> DbResult<()>;
     async fn close(&mut self) -> DbResult<()>;
 }
@@ -135,4 +167,10 @@ mod tests {
         assert!(validate_sql(Engine::MySql, "EXECUTE hidden_call").is_err());
         assert!(validate_sql(Engine::Postgres, "DO $$ BEGIN PERFORM 1; END $$").is_err());
     }
+}
+
+#[derive(Clone)]
+pub enum BoundParameters {
+    Text(Vec<String>),
+    Typed(Vec<DbValue>),
 }

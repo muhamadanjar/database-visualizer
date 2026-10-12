@@ -1,7 +1,7 @@
 # Shared Database Core & Adapter
 
-**Status implementasi:** Selesai untuk Foundation; platform lanjutan belum dimulai  
-**Fase:** Phase 1  
+**Status implementasi:** Foundation selesai; perluasan core Phase 2 tervalidasi pada kedua engine
+**Fase:** Phase 1
 **Sumber:** [PRD](../../PRD.md) §§6–10, 37, 48, 54–57.
 
 ## Tujuan
@@ -27,8 +27,13 @@ Tidak mencakup engine tambahan atau semua crate target PRD sekaligus.
 ## Dokumen terkait
 
 - [Plan utama](../plans/phase-1-foundation.md); lihat [indeks fase](../plans/README.md) untuk platform/fase lanjutan.
-- [Desain Foundation](../design-docs/2026-10-09-foundation.md) menetapkan batas core; desain fase berikutnya belum tersedia.
+- [Foundation](../design-docs/2026-10-09-foundation.md) menetapkan baseline; [Desktop MVP — Approved](../design-docs/2026-10-09-desktop-mvp.md) merencanakan script, metadata lengkap, dan status transaksi authoritative dengan regression gate Foundation.
 
 ## Bukti Phase 1
 
-Lihat [validasi Foundation](../plans/phase-1-foundation.md) untuk commands, hasil, dan batas bukti. Status ini tidak menyatakan UI/transport/platform MVP sudah tersedia.
+Lihat [validasi Foundation](../plans/phase-1-foundation.md) untuk commands, hasil, dan batas bukti. Bukti Foundation berbeda dari validasi desktop dan tidak menutup acceptance seluruh platform.
+
+
+## Bukti Phase 2 — 2026-10-10
+
+Lihat [laporan validasi lokal](../plans/phase-2-desktop-mvp-validation.md): 40 Rust tests, 5 frontend tests, dan 2 native Linux E2E pada PostgreSQL/MySQL. Bukti mencakup metadata/inspector, script/transaksi/cancel, grid 100.000 rows, serta clipboard OS. Controlled-store tests membuktikan encrypted persistence; OS keystore nyata tidak tersedia di mesin ini. Windows/macOS, recovery native, dan benchmark lengkap tetap gate; web adalah Phase 3.

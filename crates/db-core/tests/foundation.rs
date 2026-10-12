@@ -7,6 +7,7 @@ fn config(engine: Engine) -> ConnectionConfig {
         id: Uuid::new_v4(),
         engine,
         host: "127.0.0.1".into(),
+        tcp_address: None,
         port: std::env::var(if engine == Engine::Postgres {
             "STUDIO_PG_PORT"
         } else {
@@ -201,6 +202,12 @@ async fn workflow(engine: Engine) {
         .unwrap();
     assert_eq!(inspect.columns.len(), 3);
     assert!(
+        inspect
+            .ddl
+            .as_ref()
+            .is_some_and(|ddl| ddl.contains("CREATE TABLE"))
+    );
+    assert!(
         inspect.columns[2]
             .data_type
             .to_lowercase()
@@ -254,7 +261,7 @@ async fn workflow(engine: Engine) {
     assert!(row_values(&run(&core, id, "SELECT n FROM session_local").await).is_empty());
     assert_eq!(
         core.transaction_state(id).await.unwrap(),
-        TransactionState::Unknown
+        TransactionState::Idle
     );
     completed(&run(&core, id, &format!("DROP VIEW {view}")).await);
     completed(&run(&core, id, &format!("DROP TABLE {child}")).await);

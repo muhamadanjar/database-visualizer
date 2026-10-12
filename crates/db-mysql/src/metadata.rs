@@ -1,6 +1,6 @@
 use super::map_error;
 use db_types::*;
-use sqlx::{MySqlConnection, Row};
+use sqlx::{Column as SqlColumn, MySqlConnection, Row};
 // MySQL 8.4 exposes catalog identifiers as VARBINARY. Decode their UTF-8
 // losslessly without claiming their SQL type is VARCHAR; decoding still checks UTF-8.
 
@@ -37,6 +37,40 @@ pub async fn read(
                     "MySQL identifiers use database, not schema",
                 ));
             }
+            if matches!(
+                kind,
+                ObjectKind::Function | ObjectKind::Procedure | ObjectKind::Trigger
+            ) {
+                let (sql, filter) = if *kind == ObjectKind::Trigger {
+                    (
+                        "SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=? ORDER BY TRIGGER_NAME",
+                        None,
+                    )
+                } else {
+                    (
+                        "SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=? AND ROUTINE_TYPE=? ORDER BY ROUTINE_NAME",
+                        Some(if *kind == ObjectKind::Function {
+                            "FUNCTION"
+                        } else {
+                            "PROCEDURE"
+                        }),
+                    )
+                };
+                let mut query = sqlx::query(sql).bind(&config.database);
+                if let Some(filter) = filter {
+                    query = query.bind(filter);
+                }
+                for row in query.fetch_all(&mut *connection).await.map_err(map_error)? {
+                    response.objects.push(ObjectId {
+                        engine: config.engine,
+                        database: config.database.clone(),
+                        schema: None,
+                        name: row.try_get_unchecked("name").map_err(map_error)?,
+                        kind: *kind,
+                    });
+                }
+                return Ok(response);
+            }
             let table_type = match kind {
                 ObjectKind::Table => "BASE TABLE",
                 ObjectKind::View => "VIEW",
@@ -67,6 +101,62 @@ pub async fn read(
                     "MySQL identifiers use database, not schema",
                 ));
             }
+            let kind = match object.kind {
+                ObjectKind::Table => "TABLE",
+                ObjectKind::View => "VIEW",
+                ObjectKind::Function => "FUNCTION",
+                ObjectKind::Procedure => "PROCEDURE",
+                ObjectKind::Trigger => "TRIGGER",
+                _ => {
+                    return Err(DbError::new(
+                        "UNSUPPORTED_CAPABILITY",
+                        "metadata",
+                        "Object definition is not supported",
+                    ));
+                }
+            };
+            let quote = |name: &str| format!("`{}`", name.replace('`', "``"));
+            let ddl_sql = format!(
+                "SHOW CREATE {kind} {}.{}",
+                quote(&object.database),
+                quote(&object.name)
+            );
+            let ddl_row = sqlx::query(&ddl_sql)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(map_error)?;
+            let ddl_column = if kind == "TRIGGER" {
+                "SQL Original Statement"
+            } else {
+                match kind {
+                    "TABLE" => "Create Table",
+                    "VIEW" => "Create View",
+                    "FUNCTION" => "Create Function",
+                    _ => "Create Procedure",
+                }
+            };
+            // SHOW CREATE prepared responses can expose column names without a
+            // matching driver name-map entry. Resolve the actual column ordinal.
+            let ddl_index = ddl_row
+                .columns()
+                .iter()
+                .position(|c| c.name() == ddl_column)
+                .ok_or_else(|| {
+                    DbError::new(
+                        "DDL_UNAVAILABLE",
+                        "metadata",
+                        "Object definition is not available",
+                    )
+                })?;
+            response.ddl = ddl_row
+                .try_get_unchecked::<Option<String>, _>(ddl_index)
+                .map_err(map_error)?;
+            if matches!(
+                object.kind,
+                ObjectKind::Function | ObjectKind::Procedure | ObjectKind::Trigger
+            ) {
+                return Ok(response);
+            }
             let columns=sqlx::query("SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,CAST(ORDINAL_POSITION AS SIGNED) AS ordinal FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
             for row in columns {
                 response.columns.push(ColumnMetadata {
@@ -78,6 +168,26 @@ pub async fn read(
                         == "YES",
                     default: row.try_get_unchecked("COLUMN_DEFAULT").map_err(map_error)?,
                     ordinal: row.try_get("ordinal").map_err(map_error)?,
+                });
+            }
+            if object.kind == ObjectKind::Table {
+                let keys=sqlx::query_scalar::<_,String>("SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
+                let generated=sqlx::query_scalar::<_,String>("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%GENERATED%') ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
+                let storage=sqlx::query_scalar::<_,String>("SELECT COALESCE(ENGINE,'') FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?").bind(&object.database).bind(&object.name).fetch_one(&mut *connection).await.map_err(map_error)?;
+                // Fail closed when a trigger can write to storage outside the verified base table.
+                let triggers:i64=sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA=? AND EVENT_OBJECT_TABLE=?").bind(&object.database).bind(&object.name).fetch_one(&mut *connection).await.map_err(map_error)?;
+                response.editing = Some(EditingMetadata {
+                    primary_key: keys,
+                    generated,
+                    transactional: storage.eq_ignore_ascii_case("InnoDB") && triggers == 0,
+                    warnings: vec![
+                        if triggers > 0 {
+                            "Trigger dependency storage is unverified; editing is disabled"
+                        } else {
+                            "Constraints and FK cascades apply"
+                        }
+                        .into(),
+                    ],
                 });
             }
             let indexes=sqlx::query("SELECT INDEX_NAME AS name,GROUP_CONCAT(COALESCE(COLUMN_NAME,EXPRESSION) ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS definition,CAST(MIN(NON_UNIQUE)=0 AS UNSIGNED) AS is_unique FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? GROUP BY INDEX_NAME ORDER BY INDEX_NAME").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;

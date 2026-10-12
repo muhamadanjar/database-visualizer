@@ -276,8 +276,14 @@ impl DatabaseCore {
             .unwrap_or(false)
     }
     pub async fn transaction_state(&self, id: SessionId) -> DbResult<TransactionState> {
-        self.session(id).await?;
-        Ok(TransactionState::Unknown)
+        let session = self.session(id).await?;
+        if !session.valid.load(Ordering::Acquire) || session.busy.load(Ordering::Acquire) {
+            return Ok(TransactionState::Unknown);
+        }
+        let Ok(backend) = session.backend.try_lock() else {
+            return Ok(TransactionState::Unknown);
+        };
+        Ok(backend.transaction_state())
     }
     pub async fn metadata(
         &self,
@@ -296,6 +302,29 @@ impl DatabaseCore {
         .map_err(|_| DbError::new("METADATA_TIMEOUT", "timeout", "Metadata request timed out"))?
     }
     pub async fn execute(&self, request: QueryRequest) -> DbResult<QueryStream> {
+        self.execute_bound(request, Vec::new()).await
+    }
+    pub async fn execute_bound(
+        &self,
+        request: QueryRequest,
+        parameters: Vec<String>,
+    ) -> DbResult<QueryStream> {
+        self.execute_parameters(request, crate::BoundParameters::Text(parameters))
+            .await
+    }
+    pub async fn execute_typed(
+        &self,
+        request: QueryRequest,
+        parameters: Vec<DbValue>,
+    ) -> DbResult<QueryStream> {
+        self.execute_parameters(request, crate::BoundParameters::Typed(parameters))
+            .await
+    }
+    async fn execute_parameters(
+        &self,
+        request: QueryRequest,
+        parameters: crate::BoundParameters,
+    ) -> DbResult<QueryStream> {
         let session = self.session(request.session_id).await?;
         if !session.valid.load(Ordering::Acquire) {
             return Err(DbError::unknown());
@@ -342,6 +371,7 @@ impl DatabaseCore {
                 inner,
                 session,
                 request,
+                parameters,
                 query_id,
                 cancel,
                 QueryChannels {
@@ -623,6 +653,7 @@ async fn run_query(
     inner: Arc<Inner>,
     session: Arc<Session>,
     request: QueryRequest,
+    parameters: crate::BoundParameters,
     query_id: QueryId,
     cancel: CancellationToken,
     channels: QueryChannels,
@@ -656,7 +687,16 @@ async fn run_query(
     let result = if not_executed {
         Err(DbError::cancelled())
     } else {
-        let job = backend.execute(&request.sql, &mut sink);
+        let job = async {
+            match &parameters {
+                crate::BoundParameters::Text(values) => {
+                    backend.execute_bound(&request.sql, values, &mut sink).await
+                }
+                crate::BoundParameters::Typed(values) => {
+                    backend.execute_typed(&request.sql, values, &mut sink).await
+                }
+            }
+        };
         tokio::pin!(job);
         let deadline = async {
             match request.timeout {

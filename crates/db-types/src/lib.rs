@@ -29,6 +29,8 @@ pub struct ConnectionConfig {
     pub id: ConnectionId,
     pub engine: Engine,
     pub host: String,
+    /// Validated transport destination; hostname remains the TLS identity.
+    pub tcp_address: Option<std::net::IpAddr>,
     pub port: u16,
     pub username: String,
     pub password: String,
@@ -149,6 +151,9 @@ pub enum DataOutcome {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionState {
+    Idle,
+    Active,
+    Failed,
     Unknown,
 }
 
@@ -264,6 +269,11 @@ pub enum ObjectKind {
     Table,
     View,
     Sequence,
+    MaterializedView,
+    Function,
+    Procedure,
+    Trigger,
+    CustomType,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectId {
@@ -311,6 +321,10 @@ pub struct MetadataResponse {
     pub columns: Vec<ColumnMetadata>,
     pub indexes: Vec<IndexMetadata>,
     pub constraints: Vec<ConstraintMetadata>,
+    #[serde(default)]
+    pub ddl: Option<String>,
+    #[serde(default)]
+    pub editing: Option<EditingMetadata>,
 }
 
 #[cfg(test)]
@@ -332,4 +346,12 @@ mod tests {
         assert!(QueryStatus::Cancelled.terminal());
         assert!(!QueryStatus::Streaming.terminal());
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct EditingMetadata {
+    pub primary_key: Vec<String>,
+    pub generated: Vec<String>,
+    pub transactional: bool,
+    pub warnings: Vec<String>,
 }

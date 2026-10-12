@@ -79,6 +79,7 @@ fn config() -> ConnectionConfig {
         id: Uuid::new_v4(),
         engine: Engine::Postgres,
         host: "test-host".into(),
+        tcp_address: None,
         port: 5432,
         username: "test".into(),
         password: "redacted".into(),

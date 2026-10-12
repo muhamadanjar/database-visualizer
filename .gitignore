@@ -2,3 +2,13 @@
 .env
 .env.*
 !.env.example
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/
+test-results/
+coverage/
+*.spool
+
+apps/web/dist/
+
+.playwright-cli/

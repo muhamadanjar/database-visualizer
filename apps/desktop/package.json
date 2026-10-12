@@ -1,0 +1,6 @@
+{
+  "name": "@database-studio/desktop", "private": true, "version": "0.1.0", "type": "module",
+  "scripts": { "dev": "vite --host 127.0.0.1 --port 1420 --strictPort", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "tauri": "tauri" },
+  "dependencies": { "@database-studio/workspace": "workspace:*", "@database-studio/contracts": "workspace:*", "@tauri-apps/api": "2.12.2", "react": "19.3.0", "react-dom": "19.3.0" },
+  "devDependencies": { "@tauri-apps/cli": "2.12.1", "@types/react": "19.2.14", "@types/react-dom": "19.2.3", "typescript": "5.9.3", "vite": "8.3.4", "@vitejs/plugin-react": "6.1.2", "@wdio/tauri-plugin":"1.5.0" }
+}

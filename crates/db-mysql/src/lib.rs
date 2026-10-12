@@ -11,7 +11,7 @@ mod metadata;
 
 pub struct MySqlAdapter;
 fn options(config: &ConnectionConfig) -> MySqlConnectOptions {
-    MySqlConnectOptions::new()
+    let options = MySqlConnectOptions::new()
         .host(&config.host)
         .port(config.port)
         .username(&config.username)
@@ -24,7 +24,11 @@ fn options(config: &ConnectionConfig) -> MySqlConnectOptions {
             SslMode::Require => MySqlSslMode::Required,
             SslMode::VerifyCa => MySqlSslMode::VerifyCa,
             SslMode::VerifyFull => MySqlSslMode::VerifyIdentity,
-        })
+        });
+    match config.tcp_address {
+        Some(address) => options.tcp_address(address),
+        None => options,
+    }
 }
 async fn open(config: &ConnectionConfig) -> DbResult<sqlx::MySqlConnection> {
     tokio::time::timeout(
@@ -93,9 +97,47 @@ impl BackendSession for Session {
     fn backend_id(&self) -> u64 {
         self.id
     }
+    fn transaction_state(&self) -> TransactionState {
+        match self
+            .connection
+            .as_ref()
+            .map(|c| c.protocol_in_transaction())
+        {
+            Some(true) => TransactionState::Active,
+            Some(false) => TransactionState::Idle,
+            None => TransactionState::Unknown,
+        }
+    }
     async fn execute(
         &mut self,
         sql: &str,
+        sink: &mut dyn ResultSink,
+    ) -> DbResult<ExecutionSummary> {
+        self.execute_bound(sql, &[], sink).await
+    }
+    #[allow(deprecated)]
+    async fn execute_bound(
+        &mut self,
+        sql: &str,
+        parameters: &[String],
+        sink: &mut dyn ResultSink,
+    ) -> DbResult<ExecutionSummary> {
+        self.execute_typed(
+            sql,
+            &parameters
+                .iter()
+                .cloned()
+                .map(DbValue::Text)
+                .collect::<Vec<_>>(),
+            sink,
+        )
+        .await
+    }
+    #[allow(deprecated)]
+    async fn execute_typed(
+        &mut self,
+        sql: &str,
+        parameters: &[DbValue],
         sink: &mut dyn ResultSink,
     ) -> DbResult<ExecutionSummary> {
         let connection = self.connection.as_mut().ok_or_else(DbError::unknown)?;
@@ -115,7 +157,55 @@ impl BackendSession for Session {
             emitted = true;
         }
         let mut summary = ExecutionSummary::default();
-        let mut stream = connection.fetch_many(sql);
+        let mut query = sqlx::query(sql);
+        for parameter in parameters {
+            query = match parameter {
+                DbValue::Null => query.bind(Option::<String>::None),
+                DbValue::Boolean(v) => query.bind(*v),
+                DbValue::Signed(v) => query.bind(*v),
+                DbValue::Unsigned(v) => query.bind(*v),
+                DbValue::Float(v) => {
+                    query.bind(v.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or_else(
+                        || DbError::new("INVALID_VALUE", "query", "Finite numeric value required"),
+                    )?)
+                }
+                DbValue::Decimal(v) => {
+                    query.bind(v.parse::<bigdecimal::BigDecimal>().map_err(|_| {
+                        DbError::new("INVALID_VALUE", "query", "Exact decimal required")
+                    })?)
+                }
+                DbValue::Text(v) => query.bind(v),
+                DbValue::Binary(v) => query.bind(v),
+                DbValue::Json(v) => query.bind(sqlx::types::Json(v)),
+                DbValue::Date(v) => query
+                    .bind(v.parse::<chrono::NaiveDate>().map_err(|_| {
+                        DbError::new("INVALID_VALUE", "query", "ISO date required")
+                    })?),
+                DbValue::Time(v) => query
+                    .bind(v.parse::<chrono::NaiveTime>().map_err(|_| {
+                        DbError::new("INVALID_VALUE", "query", "ISO time required")
+                    })?),
+                DbValue::Timestamp(v) => query.bind(
+                    v.replace(' ', "T")
+                        .parse::<chrono::NaiveDateTime>()
+                        .map_err(|_| {
+                            DbError::new("INVALID_VALUE", "query", "Local timestamp required")
+                        })?,
+                ),
+                DbValue::Opaque { .. } => {
+                    return Err(DbError::new(
+                        "UNSUPPORTED_VALUE",
+                        "query",
+                        "Opaque value is read-only",
+                    ));
+                }
+            };
+        }
+        let mut stream = if parameters.is_empty() {
+            connection.fetch_many(sql)
+        } else {
+            query.fetch_many(connection)
+        };
         while let Some(item) = stream.try_next().await.map_err(map_error)? {
             match item {
                 Either::Left(result) => {

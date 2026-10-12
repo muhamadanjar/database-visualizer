@@ -1,0 +1,94 @@
+--- a/vendor/sqlx-postgres/src/options/mod.rs
++++ b/vendor/sqlx-postgres/src/options/mod.rs
+@@ -16,6 +16,7 @@
+ #[derive(Debug, Clone)]
+ pub struct PgConnectOptions {
+     pub(crate) host: String,
++    pub(crate) tcp_address: Option<std::net::IpAddr>,
+     pub(crate) port: u16,
+     pub(crate) socket: Option<PathBuf>,
+     pub(crate) username: String,
+@@ -71,6 +72,7 @@
+         PgConnectOptions {
+             port,
+             host,
++            tcp_address: None,
+             socket: None,
+             username,
+             password: var("PGPASSWORD").ok(),
+@@ -122,6 +124,13 @@
+     /// let options = PgConnectOptions::new()
+     ///     .host("localhost");
+     /// ```
++    /// Pin TCP to an already authorized IP while preserving host for TLS identity.
++    /// This bypasses DNS and Unix sockets; absent pin preserves upstream behavior.
++    pub fn tcp_address(mut self, address: std::net::IpAddr) -> Self {
++        self.tcp_address = Some(address);
++        self
++    }
++
+     pub fn host(mut self, host: &str) -> Self {
+         host.clone_into(&mut self.host);
+         self
+--- a/vendor/sqlx-mysql/src/options/mod.rs
++++ b/vendor/sqlx-mysql/src/options/mod.rs
+@@ -62,6 +62,7 @@
+ #[derive(Debug, Clone)]
+ pub struct MySqlConnectOptions {
+     pub(crate) host: String,
++    pub(crate) tcp_address: Option<std::net::IpAddr>,
+     pub(crate) port: u16,
+     pub(crate) socket: Option<PathBuf>,
+     pub(crate) username: String,
+@@ -94,6 +95,7 @@
+         Self {
+             port: 3306,
+             host: String::from("localhost"),
++            tcp_address: None,
+             socket: None,
+             username: String::from("root"),
+             password: None,
+@@ -118,6 +120,13 @@
+     ///
+     /// The default behavior when the host is not specified,
+     /// is to connect to localhost.
++    /// Pin TCP to an already authorized IP while preserving host for TLS identity.
++    /// This bypasses DNS and Unix sockets; absent pin preserves upstream behavior.
++    pub fn tcp_address(mut self, address: std::net::IpAddr) -> Self {
++        self.tcp_address = Some(address);
++        self
++    }
++
+     pub fn host(mut self, host: &str) -> Self {
+         host.clone_into(&mut self.host);
+         self
+--- a/vendor/sqlx-postgres/src/connection/stream.rs
++++ b/vendor/sqlx-postgres/src/connection/stream.rs
+@@ -42,9 +42,10 @@
+ 
+ impl PgStream {
+     pub(super) async fn connect(options: &PgConnectOptions) -> Result<Self, Error> {
+-        let socket_result = match options.fetch_socket() {
++        let tcp_host = options.tcp_address.map(|ip| ip.to_string());
++        let socket_result = match if tcp_host.is_some() { None } else { options.fetch_socket() } {
+             Some(ref path) => net::connect_uds(path, MaybeUpgradeTls(options)).await?,
+-            None => net::connect_tcp(&options.host, options.port, MaybeUpgradeTls(options)).await?,
++            None => net::connect_tcp(tcp_host.as_deref().unwrap_or(&options.host), options.port, MaybeUpgradeTls(options)).await?,
+         };
+ 
+         let socket = socket_result?;
+--- a/vendor/sqlx-mysql/src/connection/establish.rs
++++ b/vendor/sqlx-mysql/src/connection/establish.rs
+@@ -16,9 +16,10 @@
+     pub(crate) async fn establish(options: &MySqlConnectOptions) -> Result<Self, Error> {
+         let do_handshake = DoHandshake::new(options)?;
+ 
+-        let handshake = match &options.socket {
++        let tcp_host = options.tcp_address.map(|ip| ip.to_string());
++        let handshake = match if tcp_host.is_some() { None } else { options.socket.as_ref() } {
+             Some(path) => crate::net::connect_uds(path, do_handshake).await?,
+-            None => crate::net::connect_tcp(&options.host, options.port, do_handshake).await?,
++            None => crate::net::connect_tcp(tcp_host.as_deref().unwrap_or(&options.host), options.port, do_handshake).await?,
+         };
+ 
+         let stream = handshake?;

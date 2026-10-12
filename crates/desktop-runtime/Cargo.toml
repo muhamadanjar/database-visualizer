@@ -1,0 +1,31 @@
+[package]
+name = "desktop-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+hmac = "=0.12.1"
+sha2 = "=0.10.9"
+query-runtime = { path = "../query-runtime" }
+db-core.workspace = true
+db-types.workspace = true
+db-postgres.workspace = true
+db-mysql.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+rusqlite = { version = "=0.32.1", features = ["bundled", "backup"] }
+chacha20poly1305 = "=0.10.1"
+rand = "=0.8.5"
+zeroize = "=1.8.2"
+base64 = "=0.22.1"
+bigdecimal.workspace = true
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+
+[dev-dependencies]
+tempfile = "=3.20.0"

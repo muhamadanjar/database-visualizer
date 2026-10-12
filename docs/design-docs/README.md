@@ -20,5 +20,12 @@ Design doc diperlukan untuk perubahan arsitektur, komponen/service baru, schema 
 | Dokumen | Dibuat | Status | Fitur / Plan |
 |---|---|---|---|
 | [Foundation](2026-10-09-foundation.md) | 2026-10-09 | Implemented | [Core](../features/database-core-adapters.md), [query/session](../features/query-sessions-streaming.md), [Phase 1](../plans/phase-1-foundation.md) |
+| [Desktop MVP](2026-10-09-desktop-mvp.md) | 2026-10-09 | Approved | [Desktop](../features/desktop-workspace.md), [editor/grid](../features/sql-editor-result-grid.md), [Phase 2](../plans/phase-2-desktop-mvp.md) |
+| [Web MVP](2026-10-10-web-mvp.md) | 2026-10-10 | Approved | [Web/workspace](../features/web-auth-workspaces.md), [Phase 3](../plans/phase-3-web-mvp.md) |
+| [Productivity](2026-10-10-productivity.md) | 2026-10-10 | Approved | [Productivity](../features/productivity-tools.md), [Phase 4](../plans/phase-4-productivity.md) |
 
-Desain teknis Desktop, Web, Productivity, dan fitur Advanced ditulis melalui sesi keputusan tersendiri sebelum implementasi terkait.
+Desain Desktop/Web dan patch driver disetujui pengguna. Gate acceptance tetap dicatat pada plan; [validasi Web](../plans/phase-3-web-mvp-validation.md) dan [runbook](../plans/phase-3-web-mvp-operations.md) tersedia.
+
+Review transport Phase 3: [pin tujuan TCP](phase-3-driver-pinning-review.md), Approved 2026-10-10; runtime TLS/egress tetap gate.
+
+Artefak Phase 4: [kontrak implementasi/API/schema](phase-4-productivity-contracts.md); bukti dan gate terpisah pada [validasi](../plans/phase-4-productivity-validation.md).

@@ -1,0 +1,10 @@
+{
+  "measured_at": "2026-10-11T04:19:58.259Z",
+  "node": "v24.18.0",
+  "metadata_names": 20000,
+  "samples": 100,
+  "p95_ms": 18.410302,
+  "max_ms": 28.10111599999999,
+  "target_ms": 200,
+  "scope": "pure warm completion; excludes Monaco render, network and cold metadata"
+}

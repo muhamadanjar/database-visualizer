@@ -1,0 +1,16 @@
+{
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        "main-workspace",
+        {
+          "identifier": "e2e-only",
+          "windows": ["main"],
+          "permissions": ["wdio:default"]
+        }
+      ]
+    }
+  },
+  "bundle": { "active": false }
+}

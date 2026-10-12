@@ -1,0 +1,17 @@
+FROM rust:1.99-bookworm AS build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY services ./services
+COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
+COPY vendor ./vendor
+RUN cargo build -p studio-api --release --locked
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && useradd --uid 10001 --create-home studio && mkdir /results && chown studio:studio /results
+COPY --from=build /build/target/release/studio-api /usr/local/bin/studio-api
+USER 10001:10001
+ENV STUDIO_API_BIND=0.0.0.0:8080 STUDIO_SPOOL_DIRECTORY=/results
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s CMD curl --fail --silent http://127.0.0.1:8080/health/ready >/dev/null || exit 1
+ENTRYPOINT ["studio-api"]

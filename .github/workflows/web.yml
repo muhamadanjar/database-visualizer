@@ -1,0 +1,59 @@
+name: Web checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck:web && pnpm build:web && pnpm test
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p studio-api -p query-runtime -p desktop-runtime --all-targets --features studio-api/test-provider --locked -- -D warnings
+      - run: docker compose up -d --wait
+      - run: cargo test -p studio-api -p query-runtime -p db-core -p db-types -p desktop-runtime --features studio-api/test-provider --locked -- --include-ignored
+      - run: npm install --global @playwright/cli@0.1.19
+      - name: Start isolated fixture web host
+        shell: bash
+        run: |
+          set -eu
+          operator_directory="$RUNNER_TEMP/studio-web"
+          mkdir -m 700 "$operator_directory"
+          node -e 'const fs=require("node:fs"),crypto=require("node:crypto");fs.writeFileSync(process.argv[1],JSON.stringify({active:"ci",keys:{ci:crypto.randomBytes(32).toString("base64")}}),{mode:0o600});' "$operator_directory/keys.json"
+          printf '%s' '[{"host":"127.0.0.1","port":55432,"network":"127.0.0.1/32"},{"host":"127.0.0.1","port":53306,"network":"127.0.0.1/32"}]' > "$operator_directory/targets.json"
+          export STUDIO_APPLICATION_DATABASE_URL='postgres://studio_app:studio_test@127.0.0.1:55433/studio_app'
+          cargo run -p studio-api --locked -- migrate
+          export STUDIO_WEB_ORIGIN='http://127.0.0.1:3000' STUDIO_DEVELOPMENT=1 STUDIO_BOOTSTRAP_OWNER='test:owner'
+          export STUDIO_KEY_FILE="$operator_directory/keys.json" STUDIO_TARGET_POLICY_FILE="$operator_directory/targets.json" STUDIO_SPOOL_DIRECTORY="$operator_directory/results"
+          cargo run -p studio-api --features test-provider --locked > "$RUNNER_TEMP/web-api.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/web-api.pid"
+          VITE_TEST_PROVIDER=1 pnpm web > "$RUNNER_TEMP/web-vite.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/web-vite.pid"
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:8080/health/ready >/dev/null && curl --fail --silent http://127.0.0.1:3000 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - run: pnpm test:web-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-browser-screenshots
+          path: test-results/web/*.png
+      - name: Stop fixture services
+        if: always()
+        shell: bash
+        run: |
+          for name in web-api web-vite; do
+            if test -f "$RUNNER_TEMP/$name.pid"; then kill "$(cat "$RUNNER_TEMP/$name.pid")" || true; fi
+          done
+          docker compose down

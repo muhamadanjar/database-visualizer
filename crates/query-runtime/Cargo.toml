@@ -1,0 +1,26 @@
+[package]
+name = "query-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+db-core.workspace = true
+db-types.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+chacha20poly1305 = "=0.10.1"
+rand = "=0.8.5"
+zeroize = "=1.8.2"
+base64 = "=0.22.1"
+bigdecimal.workspace = true
+
+[dev-dependencies]
+db-postgres.workspace = true
+db-mysql.workspace = true
+tempfile = "=3.20.0"

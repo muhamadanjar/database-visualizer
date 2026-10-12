@@ -1,13 +1,13 @@
 # Rencana Fase
 
-Phase 1 telah divalidasi lokal; Phase 2–5 belum dimulai. Lihat bukti dan keterbatasan pada masing-masing plan.
+Phase 1 telah divalidasi lokal; Phase 2–4 berjalan; Phase 5 belum dimulai. Lihat bukti dan keterbatasan pada masing-masing plan.
 
 | Fase | Plan | Dependensi | Status |
 |---|---|---|---|
 | 1 — Foundation | [Checklist rinci](phase-1-foundation.md) | Review desain Foundation dan penyelesaian keputusan penghambat | Selesai |
-| 2 — Desktop MVP | [Milestone desktop](phase-2-desktop-mvp.md) | Acceptance criteria Phase 1 lulus | Belum dimulai |
-| 3 — Web MVP | [Milestone web](phase-3-web-mvp.md) | Core tervalidasi dan UI bersama dari Phase 2 | Belum dimulai |
-| 4 — Productivity | [Milestone produktivitas](phase-4-productivity.md) | Desktop/Web MVP tervalidasi | Belum dimulai |
+| 2 — Desktop MVP | [Milestone desktop](phase-2-desktop-mvp.md) | Acceptance criteria Phase 1 lulus | Berjalan |
+| 3 — Web MVP | [Milestone web](phase-3-web-mvp.md) | Core/UI bersama dan regresi desktop; [desain Approved](../design-docs/2026-10-10-web-mvp.md) | Berjalan |
+| 4 — Productivity | [Milestone produktivitas](phase-4-productivity.md) | Desain boleh berjalan; Desktop/Web MVP tervalidasi untuk release | Berjalan; [Approved](../design-docs/2026-10-10-productivity.md), [validasi](phase-4-productivity-validation.md) tersedia |
 | 5 — Advanced Database IDE | [Roadmap lanjutan](phase-5-advanced-ide.md) | Evaluasi kebutuhan setelah Phase 4 | Belum dimulai; future scope |
 
 ## Aturan checklist
@@ -18,3 +18,5 @@ Phase 1 telah divalidasi lokal; Phase 2–5 belum dimulai. Lihat bukti dan keter
 - Catat penghambat, keputusan desain, serta dependensi; jangan mencentang item hanya karena kode ditulis.
 - Link ke [fitur](../features/README.md) dan [design doc](../design-docs/README.md) sebagai konteks, bukan salin keputusan ke sumber paralel.
 - Perubahan requirement harus menyebut bagian PRD dan alasan penyimpangan.
+
+Phase 3: [runbook](phase-3-web-mvp-operations.md), [hasil validasi dan gate](phase-3-web-mvp-validation.md).

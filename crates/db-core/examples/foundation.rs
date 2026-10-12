@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         id: Uuid::new_v4(),
         engine,
         host: "127.0.0.1".into(),
+        tcp_address: None,
         port,
         username: "studio".into(),
         password: std::env::var("STUDIO_TEST_PASSWORD").unwrap_or_else(|_| "studio_test".into()),
