@@ -36,6 +36,314 @@ const header: DocumentHeader = {
   created_at_ms: 1,
 };
 beforeEach(() => useWorkspace.setState({ tabs: [], activeId: null }));
+
+it('runs a DML statement through the visible SQL editor Run action', async () => {
+  const request = vi.fn(async (operation: string) => {
+    if (operation === 'profiles') return [profile];
+    if (operation === 'layout') return {};
+    if (operation === 'recent_files') return [];
+    if (operation === 'metadata')
+      return {
+        objects: [],
+        columns: [],
+        indexes: [],
+        constraints: [],
+        ddl: null,
+      };
+    if (operation === 'connect')
+      return {
+        id: '00000000-0000-4000-8000-000000000003',
+        connection_id: profile.id,
+        revision: 1,
+        auto_commit: true,
+        transaction: 'Idle',
+        valid: true,
+        busy: false,
+      };
+    if (operation === 'prepare_script')
+      return [
+        {
+          sql: "UPDATE items SET name = 'changed' WHERE id = 1;",
+          start: 0,
+          end: 49,
+        },
+      ];
+    if (operation === 'execute') return { execution_id: 'execution-dml' };
+    if (operation === 'execution')
+      return {
+        id: 'execution-dml',
+        session_id: '00000000-0000-4000-8000-000000000003',
+        connection_id: profile.id,
+        status: 'Completed',
+        results: [
+          {
+            id: 'result-dml',
+            statement: 0,
+            columns: [],
+            rows: 0,
+            terminal: {
+              type: 'query_completed',
+              summary: {
+                results_complete: true,
+                affected_rows: '1',
+                rows_returned: '0',
+              },
+              elapsed_ms: 1,
+            },
+          },
+        ],
+        error: null,
+        started_at_ms: 1,
+        finished_at_ms: 2,
+        persistence_error: null,
+      };
+    if (operation === 'session')
+      return {
+        id: '00000000-0000-4000-8000-000000000003',
+        connection_id: profile.id,
+        revision: 1,
+        auto_commit: true,
+        transaction: 'Idle',
+        valid: true,
+        busy: false,
+      };
+    return null;
+  });
+  const transport = {
+    request,
+    watch: async () => () => {},
+  } as unknown as DatabaseTransport;
+  render(<Workspace transport={transport} />);
+  fireEvent.click(await screen.findByText('Unit fixture'));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await screen.findByText('Connected');
+  fireEvent.click(screen.getByRole('button', { name: 'SQL tab' }));
+  const tab = useWorkspace.getState().tabs.at(-1)!;
+  useWorkspace.getState().patch(tab.id, {
+    sql: "UPDATE items SET name = 'changed' WHERE id = 1;",
+  });
+  await waitFor(() =>
+    expect(screen.getByLabelText('SQL test editor')).toHaveValue(
+      "UPDATE items SET name = 'changed' WHERE id = 1;",
+    ),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+  await waitFor(() =>
+    expect(request).toHaveBeenCalledWith('execute', {
+      session_id: '00000000-0000-4000-8000-000000000003',
+      sql: "UPDATE items SET name = 'changed' WHERE id = 1;",
+    }),
+  );
+  expect(
+    await screen.findByText('Affected rows: 1, returned rows: 0'),
+  ).toBeTruthy();
+});
+
+it('shows the database error when a later DML statement fails', async () => {
+  const failed = {
+    id: 'execution-failed',
+    session_id: 'session-failed',
+    connection_id: profile.id,
+    status: 'Failed' as const,
+    results: [
+      {
+        id: 'result-success',
+        statement: 0,
+        columns: [],
+        rows: 0,
+        terminal: {
+          type: 'query_completed',
+          summary: {
+            results_complete: true,
+            affected_rows: '1',
+            rows_returned: '0',
+          },
+          elapsed_ms: 1,
+        },
+      },
+      {
+        id: 'result-failure',
+        statement: 1,
+        columns: [],
+        rows: 0,
+        terminal: {
+          type: 'query_failed',
+          error: {
+            code: 'CONSTRAINT_VIOLATION',
+            category: 'database',
+            message: 'Unique constraint violated',
+          },
+          elapsed_ms: 1,
+        },
+      },
+    ],
+    error: null,
+    started_at_ms: 1,
+    finished_at_ms: 2,
+    persistence_error: null,
+  };
+  useWorkspace.getState().add({
+    id: 'failed-tab',
+    connectionId: profile.id,
+    title: 'Write SQL',
+    sql: 'UPDATE items SET id = 1',
+    execution: failed,
+  });
+  const request = vi.fn(async (operation: string) => {
+    if (operation === 'profiles') return [profile];
+    if (operation === 'layout') return {};
+    if (operation === 'recent_files') return [];
+    return null;
+  });
+  render(
+    <Workspace
+      transport={{ request, watch: async () => () => {} } as DatabaseTransport}
+    />,
+  );
+  expect(await screen.findByText('Unique constraint violated')).toBeTruthy();
+});
+
+it('refreshes inspector metadata and table data to observable new values', async () => {
+  const object = {
+    engine: 'Postgres' as const,
+    database: 'fixture',
+    schema: 'public',
+    name: 'items',
+    kind: 'Table' as const,
+  };
+  let metadataVersion = 0;
+  let dataVersion = 0;
+  const session = {
+    id: '00000000-0000-4000-8000-000000000004',
+    connection_id: profile.id,
+    revision: 1,
+    auto_commit: true,
+    transaction: 'Idle' as const,
+    valid: true,
+    busy: false,
+  };
+  const request = vi.fn(
+    async (operation: string, args?: Record<string, unknown>) => {
+      if (operation === 'profiles') return [profile];
+      if (operation === 'layout') return {};
+      if (operation === 'recent_files') return [];
+      if (operation === 'connect') return session;
+      if (operation === 'metadata') {
+        const requestBody = args?.request;
+        if (requestBody === 'Schemas')
+          return {
+            objects: [{ ...object, name: 'public', kind: 'Schema' }],
+            columns: [],
+            indexes: [],
+            constraints: [],
+            ddl: null,
+          };
+        if (
+          requestBody &&
+          typeof requestBody === 'object' &&
+          'Objects' in requestBody
+        )
+          return {
+            objects: [object],
+            columns: [],
+            indexes: [],
+            constraints: [],
+            ddl: null,
+          };
+        metadataVersion += 1;
+        return {
+          objects: [],
+          columns: [
+            {
+              name: metadataVersion === 1 ? 'old_name' : 'new_name',
+              data_type: 'text',
+              nullable: true,
+              default: null,
+              ordinal: 1,
+            },
+          ],
+          indexes: [],
+          constraints: [],
+          ddl: null,
+          editing: null,
+        };
+      }
+      if (operation === 'table') {
+        dataVersion += 1;
+        return { execution_id: `execution-data-${dataVersion}` };
+      }
+      if (operation === 'execution') {
+        const id = String(args?.execution_id);
+        const version = id.endsWith('2') ? 2 : 1;
+        return {
+          id,
+          session_id: session.id,
+          connection_id: profile.id,
+          status: 'Completed',
+          results: [
+            {
+              id: `result-${version}`,
+              statement: 0,
+              columns: [{ name: 'name', database_type: 'text' }],
+              rows: 1,
+              terminal: {
+                type: 'query_completed',
+                summary: {
+                  results_complete: true,
+                  affected_rows: '0',
+                  rows_returned: '1',
+                },
+                elapsed_ms: 1,
+              },
+            },
+          ],
+          error: null,
+          started_at_ms: 1,
+          finished_at_ms: 2,
+          persistence_error: null,
+        };
+      }
+      if (operation === 'page')
+        return [
+          [{ kind: 'text', value: dataVersion === 1 ? 'before' : 'after' }],
+        ];
+      if (operation === 'close_execution') return null;
+      return null;
+    },
+  );
+  const transport = {
+    request,
+    watch: async () => () => {},
+  } as unknown as DatabaseTransport;
+  render(<Workspace transport={transport} />);
+  fireEvent.click(await screen.findByText('Unit fixture'));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await screen.findByText('Connected');
+  useWorkspace.getState().add({
+    id: 'inspector-tab',
+    connectionId: profile.id,
+    title: 'items',
+    sql: '',
+    object,
+    inspector: true,
+  });
+  expect(await screen.findByText('old_name')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Data' }));
+  await waitFor(() =>
+    expect(
+      request.mock.calls.filter(([operation]) => operation === 'table'),
+    ).toHaveLength(1),
+  );
+  fireEvent.click(screen.getByRole('button', { name: /^Refresh$/ }));
+  await waitFor(() =>
+    expect(
+      request.mock.calls.filter(([operation]) => operation === 'table'),
+    ).toHaveLength(2),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+  expect(await screen.findByText('new_name')).toBeTruthy();
+});
+
 it('loads document headers, pulls one SQL document, and saves with its own ID', async () => {
   const request = vi.fn(async (operation: string) => {
     if (operation === 'profiles') return [profile];

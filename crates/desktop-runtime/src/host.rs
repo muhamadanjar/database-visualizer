@@ -568,7 +568,7 @@ impl DesktopHost {
                         password(),
                         args.get("remember")
                             .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
+                            .unwrap_or(true),
                     )?,
                 )
                 .map_err(json_error)

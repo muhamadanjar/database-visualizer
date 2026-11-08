@@ -42,6 +42,8 @@ Status protocol authoritative, IPC limits, dan encrypted spool telah diterapkan 
 
 Lihat [laporan validasi lokal](../plans/phase-2-desktop-mvp-validation.md): 40 Rust tests, 5 frontend tests, dan 2 native Linux E2E pada PostgreSQL/MySQL. Bukti mencakup metadata/inspector, script/transaksi/cancel, grid 100.000 rows, serta clipboard OS. Controlled-store tests membuktikan encrypted persistence; OS keystore nyata tidak tersedia di mesin ini. Windows/macOS, recovery native, dan benchmark lengkap tetap gate; web adalah Phase 3.
 
+2026-11-08: hasil UPDATE lewat tombol Run script menampilkan affected rows pada native Linux PostgreSQL/MySQL; error terminal statement juga ditampilkan tanpa menyamarkan kegagalan. [Validasi terbaru](../plans/phase-2-desktop-mvp-validation.md) tetap membatasi klaim pada Linux dan fixture disposable.
+
 ## Phase 4 — Implementasi berjalan
 
 [Productivity](../design-docs/2026-10-10-productivity.md) menetapkan completion konteks umum/cache terbatas, navigasi EXPLAIN/DDL, shortcuts sesuai fokus dan staged CRUD grid hanya pada base table transactional ber-PK. Editing memerlukan typed values, scoped snapshots, conflict checking serta session/transaksi khusus; hasil query arbitrer tetap read-only. [Checklist](../plans/phase-4-productivity.md) memisahkan review/desain dari implementasi dan bukti runtime.
