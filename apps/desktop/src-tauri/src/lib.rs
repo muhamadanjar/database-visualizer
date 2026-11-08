@@ -2,7 +2,10 @@ use db_types::{DbError, DbResult};
 use desktop_runtime::{DesktopHost, IPC_VERSION, OsSecretStore};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 use tauri::{Manager, State, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -19,6 +22,24 @@ struct AppState {
     host: Arc<DesktopHost>,
     watches: Mutex<HashMap<Uuid, Watch>>,
 }
+static NEXT_WATCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+impl Watch {
+    fn acknowledge(&mut self, sequence: u64) -> bool {
+        if sequence == self.sequence && self.outstanding {
+            self.outstanding = false;
+            self.credit.add_permits(1);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn next_watch_sequence() -> u64 {
+    NEXT_WATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+}
+
 fn error() -> DbError {
     DbError::new("INVALID_REQUEST", "desktop", "Desktop request is invalid")
 }
@@ -155,12 +176,8 @@ async fn desktop_request(
             .and_then(|v| v.as_u64())
             .ok_or_else(error)?;
         let mut watches = state.watches.lock().map_err(|_| error())?;
-        if let Some(watch) = watches.get_mut(&id)
-            && sequence == watch.sequence
-            && watch.outstanding
-        {
-            watch.outstanding = false;
-            watch.credit.add_permits(1);
+        if let Some(watch) = watches.get_mut(&id) {
+            watch.acknowledge(sequence);
         }
         return Ok(serde_json::Value::Null);
     }
@@ -208,7 +225,6 @@ async fn watch_execution(
     }
     let host = state.host.clone();
     tauri::async_runtime::spawn(async move {
-        let mut sequence = 0u64;
         let mut previous = String::new();
         while let Ok(info) = host.snapshot(execution_id) {
             let signature = format!(
@@ -231,7 +247,7 @@ async fn watch_execution(
                     }
                 };
                 permit.forget();
-                sequence += 1;
+                let sequence = next_watch_sequence();
                 if let Ok(mut watches) = app.state::<AppState>().watches.lock()
                     && let Some(watch) = watches.get_mut(&execution_id)
                 {
@@ -252,6 +268,42 @@ async fn watch_execution(
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watch_allows_at_most_one_outstanding_notification() {
+        let credit = Arc::new(Semaphore::new(1));
+        let permit = credit.clone().try_acquire_owned().unwrap();
+        permit.forget();
+
+        assert!(credit.try_acquire().is_err());
+    }
+
+    #[test]
+    fn stale_or_duplicate_ack_cannot_replenish_credit() {
+        let credit = Arc::new(Semaphore::new(0));
+        let mut watch = Watch {
+            sequence: 9,
+            credit: credit.clone(),
+            outstanding: true,
+        };
+
+        assert!(!watch.acknowledge(8));
+        assert!(credit.try_acquire().is_err());
+        assert!(watch.acknowledge(9));
+        assert!(credit.try_acquire().is_ok());
+        assert!(!watch.acknowledge(9));
+        assert!(credit.try_acquire().is_err());
+    }
+
+    #[test]
+    fn watch_sequences_do_not_restart_for_a_new_watch() {
+        assert_ne!(next_watch_sequence(), next_watch_sequence());
+    }
 }
 
 pub fn run() {
