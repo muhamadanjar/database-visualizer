@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { runNativePhase } from './native-benchmark.mjs';
 const data = mkdtempSync(path.join(tmpdir(), 'database-studio-native-'));
 const env = {
   ...process.env,
@@ -31,7 +32,37 @@ try {
     'src-tauri/tauri.e2e.conf.json',
     '--no-bundle',
   ]);
-  process.exitCode = built || run(['exec', 'wdio', 'run', 'wdio.conf.mjs']);
+  if (built) {
+    process.exitCode = built;
+  } else {
+    const readyFile = path.join(data, 'native-ready');
+    const wdioArgs = ['exec', 'wdio', 'run', 'wdio.conf.mjs'];
+    const first = await runNativePhase({
+      pnpm,
+      args: wdioArgs,
+      env: {
+        ...env,
+        STUDIO_E2E_PERSIST_PROFILE: '1',
+        STUDIO_NATIVE_BENCHMARK_READY_FILE: readyFile,
+      },
+      label: 'initial',
+      readyFile,
+    });
+    process.exitCode = first;
+    if (!first) {
+      process.exitCode = await runNativePhase({
+        pnpm,
+        args: wdioArgs,
+        env: {
+          ...env,
+          STUDIO_E2E_RESTART_CHECK: '1',
+          STUDIO_NATIVE_BENCHMARK_READY_FILE: readyFile,
+        },
+        label: 'restart',
+        readyFile,
+      });
+    }
+  }
 } finally {
   rmSync(data, { recursive: true, force: true });
 }
