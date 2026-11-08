@@ -2,7 +2,10 @@ use db_types::{DbError, DbResult};
 use desktop_runtime::{DesktopHost, IPC_VERSION, OsSecretStore};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 use tauri::{Manager, State, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -19,6 +22,24 @@ struct AppState {
     host: Arc<DesktopHost>,
     watches: Mutex<HashMap<Uuid, Watch>>,
 }
+static NEXT_WATCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+impl Watch {
+    fn acknowledge(&mut self, sequence: u64) -> bool {
+        if sequence == self.sequence && self.outstanding {
+            self.outstanding = false;
+            self.credit.add_permits(1);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn next_watch_sequence() -> u64 {
+    NEXT_WATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+}
+
 fn error() -> DbError {
     DbError::new("INVALID_REQUEST", "desktop", "Desktop request is invalid")
 }
@@ -155,12 +176,8 @@ async fn desktop_request(
             .and_then(|v| v.as_u64())
             .ok_or_else(error)?;
         let mut watches = state.watches.lock().map_err(|_| error())?;
-        if let Some(watch) = watches.get_mut(&id)
-            && sequence == watch.sequence
-            && watch.outstanding
-        {
-            watch.outstanding = false;
-            watch.credit.add_permits(1);
+        if let Some(watch) = watches.get_mut(&id) {
+            watch.acknowledge(sequence);
         }
         return Ok(serde_json::Value::Null);
     }
@@ -208,7 +225,6 @@ async fn watch_execution(
     }
     let host = state.host.clone();
     tauri::async_runtime::spawn(async move {
-        let mut sequence = 0u64;
         let mut previous = String::new();
         while let Ok(info) = host.snapshot(execution_id) {
             let signature = format!(
@@ -231,7 +247,7 @@ async fn watch_execution(
                     }
                 };
                 permit.forget();
-                sequence += 1;
+                let sequence = next_watch_sequence();
                 if let Ok(mut watches) = app.state::<AppState>().watches.lock()
                     && let Some(watch) = watches.get_mut(&execution_id)
                 {
@@ -252,6 +268,64 @@ async fn watch_execution(
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_ack_from_old_watch_cannot_replenish_new_watch_credit() {
+        let execution_id = Uuid::new_v4();
+        let old_credit = Arc::new(Semaphore::new(1));
+        let old_sequence = next_watch_sequence();
+        let mut watches = HashMap::new();
+        watches.insert(
+            execution_id,
+            Watch {
+                sequence: old_sequence,
+                credit: old_credit.clone(),
+                outstanding: true,
+            },
+        );
+        let old_permit = old_credit.try_acquire_owned().unwrap();
+        old_permit.forget();
+        watches.remove(&execution_id);
+
+        let new_credit = Arc::new(Semaphore::new(1));
+        let new_sequence = next_watch_sequence();
+        watches.insert(
+            execution_id,
+            Watch {
+                sequence: new_sequence,
+                credit: new_credit.clone(),
+                outstanding: true,
+            },
+        );
+        let new_permit = new_credit.try_acquire_owned().unwrap();
+        new_permit.forget();
+
+        assert!(!watches
+            .get_mut(&execution_id)
+            .unwrap()
+            .acknowledge(old_sequence));
+        assert!(new_credit.try_acquire().is_err());
+    }
+
+    #[test]
+    fn duplicate_ack_cannot_replenish_credit() {
+        let credit = Arc::new(Semaphore::new(0));
+        let mut watch = Watch {
+            sequence: 9,
+            credit: credit.clone(),
+            outstanding: true,
+        };
+
+        assert!(watch.acknowledge(9));
+        assert!(credit.try_acquire().is_ok());
+        assert!(!watch.acknowledge(9));
+        assert!(credit.try_acquire().is_err());
+    }
 }
 
 pub fn run() {
