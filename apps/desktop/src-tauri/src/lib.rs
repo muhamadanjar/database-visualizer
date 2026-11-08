@@ -275,16 +275,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn watch_allows_at_most_one_outstanding_notification() {
-        let credit = Arc::new(Semaphore::new(1));
-        let permit = credit.clone().try_acquire_owned().unwrap();
-        permit.forget();
+    fn stale_ack_from_old_watch_cannot_replenish_new_watch_credit() {
+        let execution_id = Uuid::new_v4();
+        let old_credit = Arc::new(Semaphore::new(1));
+        let old_sequence = next_watch_sequence();
+        let mut watches = HashMap::new();
+        watches.insert(
+            execution_id,
+            Watch {
+                sequence: old_sequence,
+                credit: old_credit.clone(),
+                outstanding: true,
+            },
+        );
+        let old_permit = old_credit.try_acquire_owned().unwrap();
+        old_permit.forget();
+        watches.remove(&execution_id);
 
-        assert!(credit.try_acquire().is_err());
+        let new_credit = Arc::new(Semaphore::new(1));
+        let new_sequence = next_watch_sequence();
+        watches.insert(
+            execution_id,
+            Watch {
+                sequence: new_sequence,
+                credit: new_credit.clone(),
+                outstanding: true,
+            },
+        );
+        let new_permit = new_credit.try_acquire_owned().unwrap();
+        new_permit.forget();
+
+        assert!(!watches
+            .get_mut(&execution_id)
+            .unwrap()
+            .acknowledge(old_sequence));
+        assert!(new_credit.try_acquire().is_err());
     }
 
     #[test]
-    fn stale_or_duplicate_ack_cannot_replenish_credit() {
+    fn duplicate_ack_cannot_replenish_credit() {
         let credit = Arc::new(Semaphore::new(0));
         let mut watch = Watch {
             sequence: 9,
@@ -292,17 +321,10 @@ mod tests {
             outstanding: true,
         };
 
-        assert!(!watch.acknowledge(8));
-        assert!(credit.try_acquire().is_err());
         assert!(watch.acknowledge(9));
         assert!(credit.try_acquire().is_ok());
         assert!(!watch.acknowledge(9));
         assert!(credit.try_acquire().is_err());
-    }
-
-    #[test]
-    fn watch_sequences_do_not_restart_for_a_new_watch() {
-        assert_ne!(next_watch_sequence(), next_watch_sequence());
     }
 }
 
