@@ -371,7 +371,12 @@ impl Persistence {
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage_error)?;
         for reference in refs {
-            if self.secrets.delete(&reference).is_ok() {
+            let remove = match self.secrets.delete(&reference) {
+                Ok(()) => true,
+                Err(e) if e.code == "SECRET_MISSING" => true,
+                Err(_) => false,
+            };
+            if remove {
                 db.execute("DELETE FROM pending_secrets WHERE reference=?", [reference])
                     .map_err(storage_error)?;
             }
