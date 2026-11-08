@@ -292,9 +292,13 @@ impl Persistence {
                     )
                 })?),
             }
-        } else if password.is_none() {
-            old_reference.clone()
         } else {
+            if old_reference.is_some() && password.is_none() {
+                return Err(error(
+                    "SECRET_MISSING",
+                    "Enter the password before switching to memory-only",
+                ));
+            }
             None
         };
         let transaction = db.transaction().map_err(storage_error)?;

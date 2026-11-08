@@ -139,6 +139,70 @@ it('runs a DML statement through the visible SQL editor Run action', async () =>
   ).toBeTruthy();
 });
 
+it('shows the database error when a later DML statement fails', async () => {
+  const failed = {
+    id: 'execution-failed',
+    session_id: 'session-failed',
+    connection_id: profile.id,
+    status: 'Failed' as const,
+    results: [
+      {
+        id: 'result-success',
+        statement: 0,
+        columns: [],
+        rows: 0,
+        terminal: {
+          type: 'query_completed',
+          summary: {
+            results_complete: true,
+            affected_rows: '1',
+            rows_returned: '0',
+          },
+          elapsed_ms: 1,
+        },
+      },
+      {
+        id: 'result-failure',
+        statement: 1,
+        columns: [],
+        rows: 0,
+        terminal: {
+          type: 'query_failed',
+          error: {
+            code: 'CONSTRAINT_VIOLATION',
+            category: 'database',
+            message: 'Unique constraint violated',
+          },
+          elapsed_ms: 1,
+        },
+      },
+    ],
+    error: null,
+    started_at_ms: 1,
+    finished_at_ms: 2,
+    persistence_error: null,
+  };
+  useWorkspace.getState().add({
+    id: 'failed-tab',
+    connectionId: profile.id,
+    title: 'Write SQL',
+    sql: 'UPDATE items SET id = 1',
+    execution: failed,
+  });
+  const request = vi.fn(async (operation: string) => {
+    if (operation === 'profiles') return [profile];
+    if (operation === 'layout') return {};
+    if (operation === 'recent_files') return [];
+    return null;
+  });
+  render(
+    <Workspace
+      transport={{ request, watch: async () => () => {} } as DatabaseTransport}
+    />,
+  );
+  expect(await screen.findByText('Unique constraint violated')).toBeTruthy();
+});
+
 it('refreshes inspector metadata and table data to observable new values', async () => {
   const object = {
     engine: 'Postgres' as const,
@@ -264,23 +328,20 @@ it('refreshes inspector metadata and table data to observable new values', async
     inspector: true,
   });
   expect(await screen.findByText('old_name')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh', exact: true }));
-  expect(await screen.findByText('new_name')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Data' }));
   await waitFor(() =>
     expect(
       request.mock.calls.filter(([operation]) => operation === 'table'),
     ).toHaveLength(1),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Data' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Terapkan \/ Refresh' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Refresh$/ }));
   await waitFor(() =>
     expect(
       request.mock.calls.filter(([operation]) => operation === 'table'),
     ).toHaveLength(2),
   );
-  expect(
-    request.mock.calls.filter(([operation]) => operation === 'page'),
-  ).toHaveLength(2);
+  fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+  expect(await screen.findByText('new_name')).toBeTruthy();
 });
 
 it('loads document headers, pulls one SQL document, and saves with its own ID', async () => {

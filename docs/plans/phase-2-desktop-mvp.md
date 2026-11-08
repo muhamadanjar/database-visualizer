@@ -44,10 +44,10 @@ Target PRD: cold startup <2 detik, idle memory <200 MB, navigasi 10.000+ objects
 
 ## Keputusan dan gate tersisa
 
-Keputusan Q1–Q18, accessor status protocol, enkripsi XChaCha20-Poly1305, SQLite schema 1, dependency lock, dan batas IPC telah diterapkan. SSH, signing, dan auto-update ditunda. Gate tersisa: native Windows/macOS, credential store nyata tersedia/locked/missing, recovery lintas SQLite/OS store, stress slow ACK, paket tiap OS, serta benchmark cold startup/idle memory/katalog UI.
+Keputusan Q1–Q18, accessor status protocol, enkripsi XChaCha20-Poly1305, SQLite schema 1, dependency lock, dan batas IPC telah diterapkan. SSH, signing, dan auto-update ditunda. Regression 2026-11-08 memperbaiki default simpan password OS, refresh Data, dan umpan balik UPDATE; gate tersisa: native Windows/macOS, credential store locked/missing dan restart nyata, recovery lintas SQLite/OS store, stress slow ACK, paket tiap OS, serta benchmark cold startup/idle memory/katalog UI.
 
 ## Validasi & progres
 
 2026-10-10: item bertanda [x] merujuk artefak kode dan hasil pada [laporan validasi](phase-2-desktop-mvp-validation.md): 40 Rust tests, 5 frontend tests, dan 2 native Linux E2E dengan database nyata. Clippy, rustfmt, TypeScript, dan formatter diperiksa. Native grid menampilkan 100.000 rows pada masing-masing engine; benchmark core membaca 10.000 object PostgreSQL.
 
-Item yang belum dicentang telah memiliki sebagian implementasi atau bukti lokal, tetapi gate lengkap belum lulus. Credential store Linux pada mesin ini tidak tersedia; encrypted persistence diuji memakai controlled store. Pipeline dan validasi tiga OS belum dijalankan. Phase 2 belum boleh ditandai Selesai atau desain Implemented.
+Item yang belum dicentang telah memiliki sebagian implementasi atau bukti lokal, tetapi gate lengkap belum lulus. 2026-11-08: probe OS credential store Linux round-trip/delete berhasil dan native E2E kedua engine lulus untuk UPDATE serta refresh Data; lihat [laporan validasi](phase-2-desktop-mvp-validation.md). Restart dengan keystore asli, locked/missing, pipeline dan validasi tiga OS belum dijalankan. Phase 2 belum boleh ditandai Selesai atau desain Implemented.

@@ -91,7 +91,7 @@ fn secrets_and_sql_never_enter_sqlite_plaintext() {
     assert_eq!(store.profiles().unwrap().len(), 1);
 }
 #[test]
-fn failed_secret_rotation_keeps_old_credential_and_revision() {
+fn failed_secret_rotation_and_memory_only_switch_preserve_retention_choice() {
     let dir = tempfile::tempdir().unwrap();
     let secrets = Arc::new(Secrets::default());
     let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
@@ -102,8 +102,15 @@ fn failed_secret_rotation_keeps_old_credential_and_revision() {
     secrets.locked.store(false, Ordering::Release);
     store.cleanup_secrets().unwrap();
     assert_eq!(store.password(p.id).unwrap(), "old");
-    let updated = store.save_profile(p, None, false).unwrap();
-    assert_eq!(store.password(updated.id).unwrap(), "old");
+    let error = store.save_profile(p.clone(), None, false).unwrap_err();
+    assert_eq!(error.code, "SECRET_MISSING");
+    assert_eq!(store.password(p.id).unwrap(), "old");
+    let updated = store.save_profile(p, Some("session-only"), false).unwrap();
+    assert!(matches!(
+        store.password(updated.id),
+        Err(error) if error.code == "SECRET_MISSING"
+    ));
+    assert!(!secrets.values.lock().unwrap().values().any(|v| v == b"old"));
 }
 
 #[test]

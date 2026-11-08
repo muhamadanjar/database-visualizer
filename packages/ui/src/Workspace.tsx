@@ -756,6 +756,8 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     execution?.results[
       Math.min(resultIndex, Math.max(0, execution.results.length - 1))
     ];
+  const executionError =
+    execution?.error ?? execution?.results.at(-1)?.terminal?.error;
   return (
     <div className="workbench">
       <header className="toolbar">
@@ -1388,8 +1390,9 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                       editor.current = handle;
                     }}
                     completions={
+                      profile &&
                       completionScope.current ===
-                        profile!.id + '/' + profile!.revision &&
+                        profile.id + '/' + profile.revision &&
                       Date.now() - completionUpdated.current < 300000
                         ? completions
                         : []
@@ -1459,21 +1462,22 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
               {execution && terminal(execution.status) ? (
                 <div className="execution-summary" role="status">
                   <strong>{execution.status}</strong>
-                  {result?.terminal?.summary ? (
+                  {execution.status === 'Completed' &&
+                  result?.terminal?.summary ? (
                     <span>
                       {`Affected rows: ${result.terminal.summary.affected_rows}`}
                       {`, returned rows: ${result.terminal.summary.rows_returned}`}
                     </span>
-                  ) : (
-                    <span>Statement selesai tanpa result set.</span>
-                  )}
+                  ) : executionError ? (
+                    <span className="error-text">{executionError.message}</span>
+                  ) : null}
                 </div>
               ) : null}
               {bottomTab === 'messages' ? (
                 <div className="messages">
                   <p>{execution?.status ?? 'Belum ada eksekusi.'}</p>
-                  {execution?.error ? (
-                    <p className="error-text">{execution.error.message}</p>
+                  {executionError ? (
+                    <p className="error-text">{executionError.message}</p>
                   ) : null}
                   {execution?.persistence_error ? (
                     <p className="error-text">
@@ -1703,7 +1707,12 @@ function Inspector({
           </span>
           <h1>{tab.object?.name}</h1>
         </div>
-        <button onClick={() => void Promise.all([metadata.refetch(), data(0)])}>
+        <button
+          onClick={() => {
+            void metadata.refetch();
+            if (section === 'Data' && queryable) void data(0);
+          }}
+        >
           <Icon name="refresh" /> Refresh
         </button>
       </header>

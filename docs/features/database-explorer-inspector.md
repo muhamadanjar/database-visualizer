@@ -40,3 +40,5 @@ Lihat [validasi Foundation](../plans/phase-1-foundation.md) untuk commands, hasi
 ## Bukti Phase 2 — 2026-10-10
 
 Lihat [laporan validasi lokal](../plans/phase-2-desktop-mvp-validation.md): 40 Rust tests, 5 frontend tests, dan 2 native Linux E2E pada PostgreSQL/MySQL. Bukti mencakup metadata/inspector, script/transaksi/cancel, grid 100.000 rows, serta clipboard OS. Controlled-store tests membuktikan encrypted persistence; OS keystore nyata tidak tersedia di mesin ini. Windows/macOS, recovery native, dan benchmark lengkap tetap gate; web adalah Phase 3.
+
+2026-11-08: tombol Refresh pada Inspector Data membaca ulang metadata dan halaman data; alur UPDATE → Refresh → nilai baru lulus native Linux pada kedua engine. Gate katalog besar dan platform lain tetap terbuka pada [laporan terbaru](../plans/phase-2-desktop-mvp-validation.md).
