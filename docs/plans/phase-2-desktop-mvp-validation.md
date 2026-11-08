@@ -1,6 +1,6 @@
 # Phase 2 — Bukti validasi lokal
 
-**Tanggal:** 2026-10-10 (benchmark katalog: 2026-10-09).
+**Tanggal:** 2026-10-10 (benchmark katalog: 2026-10-09); regresi tambahan 2026-11-08 di bagian akhir.
 **Status:** implementasi lokal Linux tersedia; acceptance Phase 2 masih Berjalan.
 **Terkait:** [plan](phase-2-desktop-mvp.md), [desain Approved](../design-docs/2026-10-09-desktop-mvp.md), [review driver](../design-docs/phase-2-driver-status-review.md).
 
@@ -39,7 +39,7 @@ Script dibatasi 1 MiB/1.000 statements; page 256 rows/2 MiB; notifikasi satu cre
 ## Gate yang masih terbuka
 
 - Windows/macOS: build/package, native E2E, credential store nyata, serta close/restart/recovery.
-- Linux: credential store tersedia/locked/missing nyata dan opt-in history/restore end-to-end.
+- Linux: store OS unlocked berhasil untuk round-trip/delete pada 2026-11-08; locked/missing nyata, restart native, serta opt-in history/restore end-to-end masih terbuka.
 - Recovery lintas SQLite/OS store setelah crash/migration failure; close aplikasi dengan transaksi aktif secara native.
 - Slow ACK/consumer close/disk-full stress native serta pengukuran RSS seluruh proses WebView.
 - Cold startup <2 detik, idle memory <200 MB, dan navigasi UI 10.000+ object.
@@ -50,3 +50,13 @@ Paket lokal unsigned tidak membuktikan signing, auto-update, distribusi publik, 
 Paket: `target/debug/bundle/deb/Database Studio_0.1.0_amd64.deb`. `dpkg-deb --info` mengenali package/version/dependency; dependency tree production tidak memuat WDIO dan frontend dist tidak memuat helper editor/automation. Paket belum diinstal sistem.
 
 Percobaan launch binary production melalui shell sandbox pada 2026-10-10 berhenti sebelum window karena GTK tidak dapat mengakses display (juga saat DISPLAY=:1). Ini belum membuktikan launch paket production; native E2E di atas adalah build automation terpisah. Pengukuran startup/idle dari percobaan ini tidak tersedia. Log: `/tmp/database-studio-production-smoke.log`.
+
+## Regresi desktop — 2026-11-08
+
+- Koneksi baru kini mencentang simpan password di OS store; pengguna dapat memilih memory-only. Koneksi lama memory-only harus diedit dan password dimasukkan kembali agar dapat dipakai setelah restart. Pindah dari OS store ke memory-only menolak password kosong, menghapus reference/secret OS setelah password baru dimasukkan, dan tidak diam-diam mempertahankan secret. Simpan dengan store terkunci/tidak tersedia gagal tanpa plaintext fallback. Regresi `desktop-runtime/tests/security.rs` membuktikan penyimpanan setelah reopen persistence dan penghapusan credential saat pindah mode pada controlled-store; belum membuktikan restart aplikasi dengan OS store nyata.
+- UI menampilkan affected/returned rows untuk hasil UPDATE serta error database dari terminal statement gagal, termasuk kegagalan setelah statement sebelumnya berhasil. Refresh Inspector Data meminta ulang metadata dan halaman tabel. Alur native mengeksekusi UPDATE pada SQL tab lalu membaca nilai baru setelah Refresh pada PostgreSQL dan MySQL.
+- `cargo test -p db-core -p db-types -p desktop-runtime -p query-runtime --locked -- --include-ignored`: 51 tes lulus dengan fixture disposable kedua engine; `pnpm test`: 20 tes setelah tambahan failure-path UI; `pnpm test:native`: dua skenario lulus di WebKit/Tauri Linux dengan fixture nyata, termasuk UPDATE dan refresh. `pnpm typecheck`, `pnpm format:check`, `cargo fmt --all --check` dan workspace Clippy diperiksa terpisah. Empat warning vendored SQLx PostgreSQL bukan kegagalan workspace.
+- Probe OS credential store dari contoh `credential_probe` melaporkan `OS_STORE_ROUNDTRIP_AND_DELETE_OK` pada sesi Linux ini. Native E2E berhasil membuat koneksi dengan opsi remember default baru, tetapi belum menguji restart nyata, store locked/missing, history/restore berbasis keyring, atau recovery lintas OS store/SQLite.
+- `pnpm --filter @database-studio/desktop tauri build --debug --bundles deb` berhasil menghasilkan paket Linux `.deb` 79,01 MiB. Ini build debug, belum dipasang atau dijalankan sebagai paket production; peringatan 4 item vendored SQLx PostgreSQL dan ukuran chunk editor Vite tetap tercatat.
+
+Status tetap **Berjalan**: belum ada bukti Windows/macOS, paket/runner tiap OS, pipeline matrix, stress ACK/disk-full, cold startup <2 detik, idle memory <200 MB, RSS WebView, maupun navigasi UI 10.000 objek. Hasil native berasal dari build automation/debug; bukan bukti paket production terpasang.

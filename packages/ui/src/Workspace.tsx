@@ -35,6 +35,19 @@ import { DefinitionText } from './DefinitionText';
 import { discardEditDrafts, editingDirty } from './editDrafts';
 import type { EditorHandle } from './SqlEditor';
 const SqlEditor = lazy(() => import('./SqlEditor'));
+export const inspectKey = (profile: Profile, object: ObjectId) =>
+  [
+    'inspect',
+    profile.id,
+    profile.revision,
+    object.engine,
+    object.database,
+    object.schema,
+    object.kind,
+    object.name,
+  ] as const;
+export const metadataQuery = (key: readonly unknown[]) =>
+  ['schemas', 'objects', 'inspect'].includes(String(key[0]));
 const makeQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -743,6 +756,8 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     execution?.results[
       Math.min(resultIndex, Math.max(0, execution.results.length - 1))
     ];
+  const executionError =
+    execution?.error ?? execution?.results.at(-1)?.terminal?.error;
   return (
     <div className="workbench">
       <header className="toolbar">
@@ -838,7 +853,11 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
             <button
               className="icon-button"
               aria-label="Refresh metadata"
-              onClick={() => void query.invalidateQueries()}
+              onClick={() =>
+                void query.invalidateQueries({
+                  predicate: (candidate) => metadataQuery(candidate.queryKey),
+                })
+              }
             >
               <Icon name="refresh" />
             </button>
@@ -1371,8 +1390,9 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                       editor.current = handle;
                     }}
                     completions={
+                      profile &&
                       completionScope.current ===
-                        profile!.id + '/' + profile!.revision &&
+                        profile.id + '/' + profile.revision &&
                       Date.now() - completionUpdated.current < 300000
                         ? completions
                         : []
@@ -1439,11 +1459,25 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                   ))}
                 </div>
               ) : null}
+              {execution && terminal(execution.status) ? (
+                <div className="execution-summary" role="status">
+                  <strong>{execution.status}</strong>
+                  {execution.status === 'Completed' &&
+                  result?.terminal?.summary ? (
+                    <span>
+                      {`Affected rows: ${result.terminal.summary.affected_rows}`}
+                      {`, returned rows: ${result.terminal.summary.rows_returned}`}
+                    </span>
+                  ) : executionError ? (
+                    <span className="error-text">{executionError.message}</span>
+                  ) : null}
+                </div>
+              ) : null}
               {bottomTab === 'messages' ? (
                 <div className="messages">
                   <p>{execution?.status ?? 'Belum ada eksekusi.'}</p>
-                  {execution?.error ? (
-                    <p className="error-text">{execution.error.message}</p>
+                  {executionError ? (
+                    <p className="error-text">{executionError.message}</p>
                   ) : null}
                   {execution?.persistence_error ? (
                     <p className="error-text">
@@ -1613,7 +1647,7 @@ function Inspector({
   const [column, setColumn] = useState('');
   const [filter, setFilter] = useState('');
   const metadata = useQuery({
-    queryKey: ['inspect', profile.id, profile.revision, tab.object],
+    queryKey: inspectKey(profile, tab.object!),
     queryFn: async () => {
       const value = await transport.request<Metadata>('metadata', {
         connection_id: profile.id,
@@ -1641,11 +1675,13 @@ function Inspector({
         throw new Error('Tunggu eksekusi saat ini selesai.');
       const session = await ensureSession(current);
       await closeOldResult(current);
+      const object = current.object;
+      if (!object) throw new Error('Object metadata tidak tersedia.');
       const result = await transport.request<{ execution_id: string }>(
         'table',
         {
           session_id: session.id,
-          object: tab.object,
+          object,
           offset: next,
           limit,
           sort_column: sortColumn,
@@ -1671,7 +1707,12 @@ function Inspector({
           </span>
           <h1>{tab.object?.name}</h1>
         </div>
-        <button onClick={() => void metadata.refetch()}>
+        <button
+          onClick={() => {
+            void metadata.refetch();
+            if (section === 'Data' && queryable) void data(0);
+          }}
+        >
           <Icon name="refresh" /> Refresh
         </button>
       </header>

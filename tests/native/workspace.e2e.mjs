@@ -345,6 +345,47 @@ describe('Native desktop with real database adapters', () => {
       await expect($('.grid-tools')).toHaveText(
         expect.stringContaining('Disalin.'),
       );
+      await $('button[aria-label="Tab SQL baru"]').click();
+      await browser.waitUntil(
+        () =>
+          browser.execute(() =>
+            document
+              .querySelector('.monaco-editor .view-lines')
+              ?.textContent?.toLowerCase()
+              .includes('version'),
+          ),
+        { timeout: 10000, timeoutMsg: 'New SQL tab did not mount' },
+      );
+      await browser.execute(
+        (sql) => window.__DATABASE_STUDIO_SET_SQL__(sql),
+        `UPDATE ${table} SET label='updated' WHERE id=1;`,
+      );
+      await browser.waitUntil(
+        () =>
+          browser.execute(() =>
+            document
+              .querySelector('.monaco-editor .view-lines')
+              ?.textContent?.includes('UPDATE'),
+          ),
+        { timeout: 10000, timeoutMsg: 'SQL editor did not show the UPDATE' },
+      );
+      await $('button=Run script').click();
+      await browser.waitUntil(
+        async () =>
+          (await $('.execution-summary').getText()).includes(
+            'Affected rows: 1',
+          ),
+        {
+          timeout: 30000,
+          timeoutMsg: 'UPDATE did not complete with one affected row',
+        },
+      );
+      await $('.tab-strip').$(`button=${table}`).click();
+      await $('button=Data').click();
+      await $('button=Refresh').click();
+      await expect($('[role="grid"]')).toHaveText(
+        expect.stringContaining('updated'),
+      );
       const cleanup = await request('execute', {
         session_id: inspectorSession.id,
         sql: `DROP TABLE ${table}`,

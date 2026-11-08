@@ -1,6 +1,6 @@
 # Connection Manager & Credential Security
 
-**Status implementasi:** Runtime dan connection CRUD desktop tervalidasi lokal; OS store native belum tersedia di mesin Linux ini; web/API tersedia, gate runtime terbuka
+**Status implementasi:** Runtime/CRUD desktop tervalidasi lokal; penyimpanan credential OS tersedia pada sesi Linux 2026-11-08, namun restart native/locked/missing dan Windows/macOS masih gate; web/API tersedia dengan gate runtime terbuka
 **Fase:** Phase 1: koneksi runtime; Phase 2: desktop persistence; Phase 3: web persistence
 **Sumber:** [PRD](../../PRD.md) §§11–12, 24, 27, 30, 39, 41.
 
@@ -13,7 +13,7 @@ Mengelola koneksi pengguna secara aman, mulai dari test connection hingga reconn
 - Field minimum: nama, engine, host, port, username, password, database, SSL mode; SSH tunnel dan timeout mengikuti scope/desain fase terkait.
 - Foundation menyediakan connect/test/disconnect/reconnect runtime; desktop/web menambahkan create/edit/delete dan persistence.
 - Desktop: password di OS credential storage; SQLite hanya metadata dan secret reference.
-- Desain Phase 2: store tidak tersedia menawarkan memory-only tanpa plaintext fallback; SQL persisten/spool terenkripsi, TLS verified default. Profil direvisi untuk session baru; reconnect eksplisit menerapkan perubahan. Update secret memakai reference baru dan recovery idempotent; hapus profil setelah cleanup session.
+- Desain Phase 2: koneksi baru menyimpan password di OS store secara default, memory-only tetap pilihan eksplisit; pindah dari OS store ke memory-only perlu mengisi ulang password dan menghapus credential lama, sedangkan perubahan tanpa password ditolak. Store tidak tersedia menolak penyimpanan tanpa plaintext fallback. Profil direvisi untuk session baru; reconnect eksplisit menerapkan perubahan. Update secret memakai reference baru dan recovery idempotent; hapus profil setelah cleanup session.
 - Web: secret dikelola serta dienkripsi backend; credential tersimpan tidak dikirim kembali ke browser.
 - Otorisasi tenant/connection dijalankan backend. Secret tidak masuk log, repository, atau frontend storage; SQL customer terpisah dari control plane.
 
@@ -40,6 +40,8 @@ Lihat [validasi Foundation](../plans/phase-1-foundation.md) untuk commands, hasi
 ## Bukti Phase 2 — 2026-10-10
 
 Lihat [laporan validasi lokal](../plans/phase-2-desktop-mvp-validation.md): 40 Rust tests, 5 frontend tests, dan 2 native Linux E2E pada PostgreSQL/MySQL. Bukti mencakup metadata/inspector, script/transaksi/cancel, grid 100.000 rows, serta clipboard OS. Controlled-store tests membuktikan encrypted persistence; OS keystore nyata tidak tersedia di mesin ini. Windows/macOS, recovery native, dan benchmark lengkap tetap gate; web adalah Phase 3.
+
+2026-11-08: default simpan credential dan kegagalan store ditutup aman; probe Secret Service Linux berhasil round-trip/delete, regresi controlled-store reopen lulus, dan native E2E kedua engine lulus dengan default baru. Restart aplikasi/restore credential OS nyata serta locked/missing tetap belum dibuktikan; lihat [validasi terbaru](../plans/phase-2-desktop-mvp-validation.md).
 
 
 ## Implementasi web Phase 3 — Berjalan
