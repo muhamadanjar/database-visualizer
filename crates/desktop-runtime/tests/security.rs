@@ -91,7 +91,7 @@ fn secrets_and_sql_never_enter_sqlite_plaintext() {
     assert_eq!(store.profiles().unwrap().len(), 1);
 }
 #[test]
-fn failed_secret_rotation_keeps_old_credential_and_revision() {
+fn failed_secret_rotation_and_memory_only_switch_preserve_retention_choice() {
     let dir = tempfile::tempdir().unwrap();
     let secrets = Arc::new(Secrets::default());
     let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
@@ -102,8 +102,102 @@ fn failed_secret_rotation_keeps_old_credential_and_revision() {
     secrets.locked.store(false, Ordering::Release);
     store.cleanup_secrets().unwrap();
     assert_eq!(store.password(p.id).unwrap(), "old");
-    let updated = store.save_profile(p, None, false).unwrap();
-    assert_eq!(store.password(updated.id).unwrap(), "old");
+    let error = store.save_profile(p.clone(), None, false).unwrap_err();
+    assert_eq!(error.code, "SECRET_MISSING");
+    assert_eq!(store.password(p.id).unwrap(), "old");
+    let updated = store.save_profile(p, Some("session-only"), false).unwrap();
+    assert!(matches!(
+        store.password(updated.id),
+        Err(error) if error.code == "SECRET_MISSING"
+    ));
+    assert!(!secrets.values.lock().unwrap().values().any(|v| v == b"old"));
+}
+
+#[test]
+fn remembered_password_survives_persistence_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Secrets::default());
+    let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
+    let profile = store
+        .save_profile(profile(), Some("restart-password"), true)
+        .unwrap();
+    drop(store);
+
+    let reopened = Persistence::open(dir.path(), secrets).unwrap();
+    assert_eq!(reopened.password(profile.id).unwrap(), "restart-password");
+}
+
+#[test]
+fn memory_only_password_is_not_available_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Secrets::default());
+    let host = DesktopHost::open(dir.path().into(), secrets.clone()).unwrap();
+    let profile = host
+        .save_profile(profile(), Some("session-only-password".into()), false)
+        .unwrap();
+    drop(host);
+
+    let reopened = Persistence::open(dir.path(), secrets).unwrap();
+    assert!(matches!(
+        reopened.password(profile.id),
+        Err(error) if error.code == "SECRET_MISSING"
+    ));
+}
+
+#[test]
+fn remembered_profile_fails_closed_when_secret_store_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Secrets::default());
+    let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
+    secrets.locked.store(true, Ordering::Release);
+
+    let error = store
+        .save_profile(profile(), Some("not-persisted"), true)
+        .unwrap_err();
+    assert_eq!(error.code, "SECRET_STORE_UNAVAILABLE");
+    assert!(store.profiles().unwrap().is_empty());
+}
+
+#[test]
+fn remembered_profile_without_password_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Persistence::open(dir.path(), Arc::new(Secrets::default())).unwrap();
+
+    let error = store.save_profile(profile(), None, true).unwrap_err();
+    assert_eq!(error.code, "SECRET_MISSING");
+    assert!(store.profiles().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ipc_save_defaults_to_remembered_credentials_when_unspecified() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Secrets::default());
+    let host = DesktopHost::open(dir.path().into(), secrets.clone()).unwrap();
+    let profile = profile();
+
+    host.request(serde_json::json!({
+        "operation": "save_profile",
+        "args": {
+            "profile": profile,
+            "password": "ipc-default-password"
+        }
+    }))
+    .await
+    .unwrap();
+
+    let saved = host.persistence.profiles().unwrap().pop().unwrap();
+    assert_eq!(
+        host.persistence.password(saved.id).unwrap(),
+        "ipc-default-password"
+    );
+    assert!(
+        secrets
+            .values
+            .lock()
+            .unwrap()
+            .values()
+            .any(|value| { value == b"ipc-default-password" })
+    );
 }
 #[test]
 fn locked_or_missing_credential_never_falls_back_to_plaintext_or_new_secret() {

@@ -35,7 +35,7 @@ export function ConnectionDialog({
     initial ?? { ...newProfile(), ...(isWeb ? { host: '127.0.0.1' } : {}) },
   );
   const [password, setPassword] = useState('');
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const update = <K extends keyof Profile>(key: K, value: Profile[K]) =>
@@ -249,7 +249,8 @@ export function ConnectionDialog({
                 checked={remember}
                 onChange={(e) => setRemember(e.target.checked)}
               />
-              Simpan password di credential store OS
+              Simpan password di credential store OS (hapus centang untuk
+              memory-only)
             </label>
           )}
           {isWeb && <p>Credential disimpan terenkripsi oleh backend.</p>}

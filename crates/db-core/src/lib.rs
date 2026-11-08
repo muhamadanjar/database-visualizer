@@ -167,6 +167,15 @@ mod tests {
         assert!(validate_sql(Engine::MySql, "EXECUTE hidden_call").is_err());
         assert!(validate_sql(Engine::Postgres, "DO $$ BEGIN PERFORM 1; END $$").is_err());
     }
+
+    #[test]
+    fn statement_validation_allows_supported_mutations() {
+        for engine in [Engine::Postgres, Engine::MySql] {
+            assert!(validate_sql(engine, "INSERT INTO items (id) VALUES (1)").is_ok());
+            assert!(validate_sql(engine, "UPDATE items SET id = 2 WHERE id = 1").is_ok());
+            assert!(validate_sql(engine, "DELETE FROM items WHERE id = 2").is_ok());
+        }
+    }
 }
 
 #[derive(Clone)]
