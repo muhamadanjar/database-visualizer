@@ -285,7 +285,12 @@ impl Persistence {
                     self.secrets.set(&reference, password.as_bytes())?;
                     Some(reference)
                 }
-                None => old_reference.clone(),
+                None => Some(old_reference.clone().ok_or_else(|| {
+                    error(
+                        "SECRET_MISSING",
+                        "Enter a password before saving it in the OS credential store",
+                    )
+                })?),
             }
         } else if password.is_none() {
             old_reference.clone()
