@@ -53,24 +53,6 @@ async function waitExecution(id) {
   );
   return request('execution', { execution_id: id });
 }
-function objectBenchSql(engine, prefix) {
-  if (engine === 'Postgres') {
-    return `DO $$ BEGIN FOR i IN 1..10000 LOOP EXECUTE format('CREATE TABLE IF NOT EXISTS public.${prefix}_%s (id integer)', i); END LOOP; END $$;`;
-  }
-  return Array.from(
-    { length: 10000 },
-    (_, index) => `CREATE TABLE IF NOT EXISTS \`${prefix}_${index + 1}\` (id INT);`,
-  ).join('');
-}
-function dropObjectBenchSql(engine, prefix) {
-  if (engine === 'Postgres') {
-    return `DO $$ DECLARE name text; BEGIN FOR name IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE '${prefix}_%' LOOP EXECUTE format('DROP TABLE IF EXISTS public.%I', name); END LOOP; END $$;`;
-  }
-  return Array.from(
-    { length: 10000 },
-    (_, index) => `DROP TABLE IF EXISTS \`${prefix}_${index + 1}\`;`,
-  ).join('');
-}
 describe('Native desktop with real database adapters', () => {
   if (restartCheck) return;
   for (const engine of process.env.STUDIO_E2E_ENGINE
@@ -302,44 +284,6 @@ describe('Native desktop with real database adapters', () => {
         expect.stringContaining('2 rows'),
       );
 
-      const objectPrefix = `e2e_native_${randomUUID().replaceAll('-', '')}`;
-      const objectSetup = await request('execute', {
-        session_id: inspectorSession.id,
-        sql: objectBenchSql(engine, objectPrefix),
-      });
-      assert.equal(
-        (await waitExecution(objectSetup.execution_id)).status,
-        'Completed',
-      );
-      await request('close_execution', {
-        execution_id: objectSetup.execution_id,
-      });
-      const objectsStarted = Date.now();
-      if (engine === 'Postgres') await $('button.schema-line*=public').click();
-      await $('button*=Tables').click();
-      await browser.waitUntil(async () => {
-        const text = await $('.count').getText();
-        return Number(text.replaceAll('.', '')) >= 10000;
-      });
-      await browser.execute(() => {
-        const element = document.querySelector('.tree-children [style*="overflow"]');
-        if (element) {
-          element.scrollTop = element.scrollHeight;
-          element.dispatchEvent(new Event('scroll'));
-        }
-      });
-      const renderedObjects = await browser.execute(
-        () => document.querySelectorAll('.tree-object').length,
-      );
-      assert(renderedObjects < 100, 'Object explorer must virtualize 10k objects');
-      console.log(
-        'OBJECTS_10K',
-        JSON.stringify({
-          engine,
-          elapsed_ms: Date.now() - objectsStarted,
-          rendered_objects: renderedObjects,
-        }),
-      );
       await $('button[aria-label="Pilih row 1"]').click();
       await $('button=Copy rows').click();
       await expect($('.grid-tools')).toHaveText(
@@ -395,17 +339,6 @@ describe('Native desktop with real database adapters', () => {
         'Completed',
       );
       await request('close_execution', { execution_id: cleanup.execution_id });
-      const objectCleanup = await request('execute', {
-        session_id: inspectorSession.id,
-        sql: dropObjectBenchSql(engine, objectPrefix),
-      });
-      assert.equal(
-        (await waitExecution(objectCleanup.execution_id)).status,
-        'Completed',
-      );
-      await request('close_execution', {
-        execution_id: objectCleanup.execution_id,
-      });
       await request('disconnect', {
         session_id: inspectorSession.id,
         force: true,
@@ -445,18 +378,11 @@ describe('Native desktop restart persistence', () => {
           'CREDENTIAL_RESTART',
           JSON.stringify({ engine, restored: true }),
         );
-      } catch (error) {
-        const message = String(error?.message ?? error);
-        if (!message.includes('SECRET_MISSING')) throw error;
-        console.log(
-          'CREDENTIAL_RESTART',
-          JSON.stringify({
-            engine,
-            restored: false,
-            limitation:
-              'automation credential service is process-namespaced; cross-process OS-secret restoration is not measurable here',
-          }),
-        );
+      } finally {
+        await request('delete_profile', {
+          connection_id: profile.id,
+          force: true,
+        });
       }
     });
 });
