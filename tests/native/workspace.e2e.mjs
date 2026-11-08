@@ -1,6 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 mkdirSync('test-results/native', { recursive: true });
 const request = (operation, args = {}) =>
@@ -14,8 +14,9 @@ const restartCheck = process.env.STUDIO_E2E_RESTART_CHECK === '1';
 const persistProfile = process.env.STUDIO_E2E_PERSIST_PROFILE === '1';
 
 before(async () => {
-  const readyFile = process.env.STUDIO_NATIVE_BENCHMARK_READY_FILE;
-  if (readyFile) writeFileSync(readyFile, `${Date.now()}\n`);
+  const idleGateFile = process.env.STUDIO_NATIVE_IDLE_GATE_FILE;
+  const idleSampleCompleteFile =
+    process.env.STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE;
   console.log(
     'CONSUMER_BACKPRESSURE',
     JSON.stringify({
@@ -24,7 +25,16 @@ before(async () => {
         'current WDIO Tauri invoke surface exposes core.invoke but no deterministic Channel hook for withholding ACK or closing the consumer',
     }),
   );
-  if (readyFile) await browser.pause(2500);
+  if (idleGateFile) {
+    await browser.pause(2500);
+    writeFileSync(idleGateFile, `${Date.now()}\n`);
+    if (idleSampleCompleteFile && process.platform === 'linux') {
+      await browser.waitUntil(() => existsSync(idleSampleCompleteFile), {
+        timeout: 10000,
+        timeoutMsg: 'Native idle RSS sample did not complete',
+      });
+    }
+  }
 });
 // Embedded WebKit option-click does not dispatch select change; dispatch a DOM change.
 const select = (label, value) =>

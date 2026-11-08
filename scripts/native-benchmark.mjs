@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -56,9 +56,19 @@ function appPids(baseline) {
   );
 }
 
-export async function runNativePhase({ pnpm, args, env, label, readyFile }) {
+export async function runNativePhase({
+  pnpm,
+  args,
+  env,
+  label,
+  idleGateFile,
+  idleSampleCompleteFile,
+}) {
   try {
-    unlinkSync(readyFile);
+    unlinkSync(idleGateFile);
+  } catch {}
+  try {
+    unlinkSync(idleSampleCompleteFile);
   } catch {}
   const baseline = new Set(procPids());
   const child = spawn(pnpm, args, {
@@ -72,11 +82,15 @@ export async function runNativePhase({ pnpm, args, env, label, readyFile }) {
   if (process.platform !== 'linux') {
     const exitCode = await exit;
     console.log(
-      'NATIVE_STARTUP',
+      'NATIVE_PROCESS_METRICS',
       JSON.stringify({
         phase: label,
         platform: process.platform,
-        cold_startup_ms: null,
+        startup: {
+          available: false,
+          limitation:
+            'startup unavailable: WDIO launches the native binary, so no real process-launch timestamp is observable',
+        },
         whole_process_idle_rss_kb: null,
         instrumentation:
           'missing: process/RSS instrumentation is intentionally Linux-only',
@@ -84,39 +98,41 @@ export async function runNativePhase({ pnpm, args, env, label, readyFile }) {
     );
     return exitCode;
   }
-  let appSeenWall;
-  let readyWall;
+  let idleGateSeen;
   let idleRssKb;
   const deadline = Date.now() + 120000;
-  while (!readyWall && Date.now() < deadline && child.exitCode === null) {
+  while (!idleGateSeen && Date.now() < deadline && child.exitCode === null) {
     const apps = appPids(baseline);
-    if (apps.length && !appSeenWall) appSeenWall = Date.now();
-    if (apps.length && !readyWall) {
+    if (apps.length && !idleGateSeen) {
       try {
-        readyWall = Number(readFileSync(readyFile, 'utf8').trim());
+        readFileSync(idleGateFile, 'utf8');
+        idleGateSeen = true;
       } catch {}
     }
     await sleep(100);
   }
-  if (readyWall && appSeenWall) {
-    await sleep(2000);
+  if (idleGateSeen) {
     const roots = appPids(baseline);
     const pids = new Set(roots.flatMap((pid) => processTree(pid)));
     idleRssKb = [...pids].reduce((total, pid) => total + rssKb(pid), 0);
+    writeFileSync(idleSampleCompleteFile, `${Date.now()}\n`);
   }
   const exitCode = await exit;
   console.log(
-    'NATIVE_STARTUP',
+    'NATIVE_PROCESS_METRICS',
     JSON.stringify({
       phase: label,
       platform: process.platform,
-      cold_startup_ms:
-        readyWall && appSeenWall ? readyWall - appSeenWall : null,
+      startup: {
+        available: false,
+        limitation:
+          'startup unavailable: no process-launch timestamp from the native launcher',
+      },
       whole_process_idle_rss_kb: idleRssKb ?? null,
       instrumentation:
-        readyWall && appSeenWall
-          ? 'Linux /proc process tree and native ready marker'
-          : 'missing: native process or ready marker was not observable',
+        idleGateSeen
+          ? 'Linux /proc process tree sampled after the explicit pre-work idle gate and before database connections'
+          : 'missing: native process or pre-work idle gate was not observable',
     }),
   );
   return exitCode;

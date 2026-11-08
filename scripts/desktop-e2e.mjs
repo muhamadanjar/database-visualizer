@@ -35,7 +35,8 @@ try {
   if (built) {
     process.exitCode = built;
   } else {
-    const readyFile = path.join(data, 'native-ready');
+    const idleGateFile = path.join(data, 'native-idle-gate');
+    const idleSampleCompleteFile = path.join(data, 'native-idle-sampled');
     const wdioArgs = ['exec', 'wdio', 'run', 'wdio.conf.mjs'];
     const first = await runNativePhase({
       pnpm,
@@ -43,10 +44,12 @@ try {
       env: {
         ...env,
         STUDIO_E2E_PERSIST_PROFILE: '1',
-        STUDIO_NATIVE_BENCHMARK_READY_FILE: readyFile,
+        STUDIO_NATIVE_IDLE_GATE_FILE: idleGateFile,
+        STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE: idleSampleCompleteFile,
       },
       label: 'initial',
-      readyFile,
+      idleGateFile,
+      idleSampleCompleteFile,
     });
     process.exitCode = first;
     if (!first) {
@@ -56,10 +59,12 @@ try {
         env: {
           ...env,
           STUDIO_E2E_RESTART_CHECK: '1',
-          STUDIO_NATIVE_BENCHMARK_READY_FILE: readyFile,
+          STUDIO_NATIVE_IDLE_GATE_FILE: idleGateFile,
+          STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE: idleSampleCompleteFile,
         },
         label: 'restart',
-        readyFile,
+        idleGateFile,
+        idleSampleCompleteFile,
       });
     }
   }
