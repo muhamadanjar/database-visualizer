@@ -41,6 +41,41 @@ impl SecretStore for Secrets {
         Ok(())
     }
 }
+#[derive(Default)]
+struct MissingDeleteSecrets {
+    values: Mutex<HashMap<String, Vec<u8>>>,
+    locked: AtomicBool,
+}
+impl SecretStore for MissingDeleteSecrets {
+    fn get(&self, key: &str) -> DbResult<Vec<u8>> {
+        if self.locked.load(Ordering::Acquire) {
+            return Err(DbError::new("SECRET_STORE_UNAVAILABLE", "secret", "locked"));
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .ok_or_else(|| DbError::new("SECRET_MISSING", "secret", "missing"))
+    }
+    fn set(&self, key: &str, value: &[u8]) -> DbResult<()> {
+        if self.locked.load(Ordering::Acquire) {
+            return Err(DbError::new("SECRET_STORE_UNAVAILABLE", "secret", "locked"));
+        }
+        self.values.lock().unwrap().insert(key.into(), value.into());
+        Ok(())
+    }
+    fn delete(&self, key: &str) -> DbResult<()> {
+        if self.locked.load(Ordering::Acquire) {
+            return Err(DbError::new("SECRET_STORE_UNAVAILABLE", "secret", "locked"));
+        }
+        if self.values.lock().unwrap().remove(key).is_some() {
+            Ok(())
+        } else {
+            Err(DbError::new("SECRET_MISSING", "secret", "missing"))
+        }
+    }
+}
 fn profile() -> Profile {
     Profile {
         id: Uuid::new_v4(),
@@ -222,9 +257,14 @@ fn locked_or_missing_credential_never_falls_back_to_plaintext_or_new_secret() {
 #[test]
 fn missing_orphan_secret_reference_is_removed_but_locked_cleanup_is_retryable() {
     let dir = tempfile::tempdir().unwrap();
-    let secrets = Arc::new(Secrets::default());
+    let secrets = Arc::new(MissingDeleteSecrets::default());
     let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
     let orphan = "connection/orphan";
+    secrets
+        .values
+        .lock()
+        .unwrap()
+        .insert(orphan.into(), b"orphan".into());
     rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
         .unwrap()
         .execute("INSERT INTO pending_secrets(reference) VALUES (?)", [orphan])
@@ -242,13 +282,17 @@ fn missing_orphan_secret_reference_is_removed_but_locked_cleanup_is_retryable() 
     assert_eq!(pending, 0);
 
     let retry = "connection/retry";
+    secrets
+        .values
+        .lock()
+        .unwrap()
+        .insert(retry.into(), b"retry".into());
     rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
         .unwrap()
         .execute("INSERT INTO pending_secrets(reference) VALUES (?)", [retry])
         .unwrap();
     secrets.locked.store(true, Ordering::Release);
     store.cleanup_secrets().unwrap();
-    secrets.locked.store(false, Ordering::Release);
     let pending: i64 = rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
         .unwrap()
         .query_row(
@@ -258,6 +302,17 @@ fn missing_orphan_secret_reference_is_removed_but_locked_cleanup_is_retryable() 
         )
         .unwrap();
     assert_eq!(pending, 1);
+    secrets.locked.store(false, Ordering::Release);
+    store.cleanup_secrets().unwrap();
+    let pending: i64 = rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM pending_secrets WHERE reference=?",
+            [retry],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pending, 0);
 }
 #[test]
 fn history_opt_in_layout_allowlist_and_schema_downgrade_guard() {
@@ -597,10 +652,23 @@ fn os_secret_store_restart_round_trip_uses_only_a_unique_throwaway_service() {
     let dir = tempfile::tempdir().unwrap();
     let store = match Persistence::open(dir.path(), secrets.clone()) {
         Ok(store) => store,
-        Err(e) if e.code == "SECRET_STORE_UNAVAILABLE" => return,
+        Err(e) if e.code == "SECRET_STORE_UNAVAILABLE" => {
+            eprintln!("SKIP os_secret_store_restart_round_trip: OS credential store unavailable");
+            return;
+        }
         Err(e) => panic!("unexpected OS store failure: {}", e.code),
     };
-    let p = store.save_profile(profile(), None, false).unwrap();
+    let p = store
+        .save_profile(profile(), Some("restart-password"), true)
+        .unwrap();
+    let password_reference: String = rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT secret_ref FROM profiles WHERE id=?",
+            [p.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
     store
         .save_document(&Document {
             id: Uuid::new_v4(),
@@ -613,11 +681,13 @@ fn os_secret_store_restart_round_trip_uses_only_a_unique_throwaway_service() {
         .unwrap();
     drop(store);
     let restarted = Persistence::open(dir.path(), secrets.clone()).unwrap();
+    assert_eq!(restarted.password(p.id).unwrap(), "restart-password");
     assert_eq!(
         restarted.documents(p.id, "saved").unwrap()[0]
             .content["sql"],
         "SELECT restart_marker"
     );
     drop(restarted);
+    let _ = secrets.delete(&password_reference);
     let _ = secrets.delete("sql-key/v1");
 }
