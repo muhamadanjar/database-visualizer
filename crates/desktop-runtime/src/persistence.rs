@@ -354,16 +354,26 @@ impl Persistence {
         self.cleanup_secrets()
     }
     pub fn cleanup_secrets(&self) -> DbResult<()> {
-        let db = self.lock()?;
-        let mut statement=db.prepare("SELECT reference FROM pending_secrets WHERE reference NOT IN (SELECT secret_ref FROM profiles WHERE secret_ref IS NOT NULL)").map_err(storage_error)?;
-        let refs = statement
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(storage_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(storage_error)?;
+        let refs = {
+            let db = self.lock()?;
+            let mut statement = db
+                .prepare("SELECT reference FROM pending_secrets WHERE reference NOT IN (SELECT secret_ref FROM profiles WHERE secret_ref IS NOT NULL)")
+                .map_err(storage_error)?;
+            statement
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(storage_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(storage_error)?
+        };
         for reference in refs {
-            if self.secrets.delete(&reference).is_ok() {
-                db.execute("DELETE FROM pending_secrets WHERE reference=?", [reference])
+            let remove = match self.secrets.delete(&reference) {
+                Ok(()) => true,
+                Err(e) if e.code == "SECRET_MISSING" => true,
+                Err(_) => false,
+            };
+            if remove {
+                self.lock()?
+                    .execute("DELETE FROM pending_secrets WHERE reference=?", [reference])
                     .map_err(storage_error)?;
             }
         }

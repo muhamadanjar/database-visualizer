@@ -106,6 +106,66 @@ fn failed_secret_rotation_keeps_old_credential_and_revision() {
     assert_eq!(store.password(updated.id).unwrap(), "old");
 }
 #[test]
+fn locked_or_missing_credential_never_falls_back_to_plaintext_or_new_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Secrets::default());
+    let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
+    let p = store.save_profile(profile(), Some("old"), true).unwrap();
+
+    secrets.locked.store(true, Ordering::Release);
+    assert!(matches!(
+        store.password(p.id),
+        Err(e) if e.code == "SECRET_STORE_UNAVAILABLE"
+    ));
+    secrets.locked.store(false, Ordering::Release);
+    secrets.values.lock().unwrap().clear();
+    assert!(matches!(
+        store.password(p.id),
+        Err(e) if e.code == "SECRET_MISSING"
+    ));
+    assert!(secrets.values.lock().unwrap().is_empty());
+}
+#[test]
+fn missing_orphan_secret_reference_is_removed_but_locked_cleanup_is_retryable() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Secrets::default());
+    let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
+    let orphan = "connection/orphan";
+    rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
+        .unwrap()
+        .execute("INSERT INTO pending_secrets(reference) VALUES (?)", [orphan])
+        .unwrap();
+
+    store.cleanup_secrets().unwrap();
+    let pending: i64 = rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM pending_secrets WHERE reference=?",
+            [orphan],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pending, 0);
+
+    let retry = "connection/retry";
+    rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
+        .unwrap()
+        .execute("INSERT INTO pending_secrets(reference) VALUES (?)", [retry])
+        .unwrap();
+    secrets.locked.store(true, Ordering::Release);
+    store.cleanup_secrets().unwrap();
+    secrets.locked.store(false, Ordering::Release);
+    let pending: i64 = rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM pending_secrets WHERE reference=?",
+            [retry],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pending, 1);
+}
+#[test]
 fn history_opt_in_layout_allowlist_and_schema_downgrade_guard() {
     let dir = tempfile::tempdir().unwrap();
     let store = Persistence::open(dir.path(), Arc::new(Secrets::default())).unwrap();
@@ -395,4 +455,75 @@ fn sqlite_v1_upgrade_backup_can_restore_encrypted_documents() {
         restored.document(p.id, "saved", doc.id).unwrap().content,
         doc.content
     );
+}
+
+#[test]
+fn failed_v1_to_v2_migration_keeps_backup_and_original_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("workspace.sqlite3");
+    let db = rusqlite::Connection::open(&database).unwrap();
+    db.execute_batch(
+        "CREATE TABLE profiles(id TEXT PRIMARY KEY, body TEXT NOT NULL, secret_ref TEXT);
+         CREATE TABLE pending_secrets(reference TEXT PRIMARY KEY);
+         CREATE TABLE documents(id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, content BLOB NOT NULL, created_at_ms INTEGER NOT NULL);
+         CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE favorites(document_id TEXT PRIMARY KEY);
+         PRAGMA user_version=1;",
+    )
+    .unwrap();
+    drop(db);
+
+    assert!(Persistence::open(dir.path(), Arc::new(Secrets::default())).is_err());
+    let version: i64 = rusqlite::Connection::open(&database)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    assert!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("workspace.before-v2-"))
+    );
+    assert!(!rusqlite::Connection::open(&database)
+        .unwrap()
+        .prepare("SELECT 1 FROM sqlite_master WHERE name='mutations'")
+        .unwrap()
+        .exists([])
+        .unwrap());
+}
+
+#[test]
+fn os_secret_store_restart_round_trip_uses_only_a_unique_throwaway_service() {
+    let service = format!("dev.database-studio.test.{}", Uuid::new_v4());
+    let secrets = Arc::new(OsSecretStore::with_service(service.clone()));
+    let dir = tempfile::tempdir().unwrap();
+    let store = match Persistence::open(dir.path(), secrets.clone()) {
+        Ok(store) => store,
+        Err(e) if e.code == "SECRET_STORE_UNAVAILABLE" => return,
+        Err(e) => panic!("unexpected OS store failure: {}", e.code),
+    };
+    let p = store.save_profile(profile(), None, false).unwrap();
+    store
+        .save_document(&Document {
+            id: Uuid::new_v4(),
+            connection_id: p.id,
+            kind: "saved".into(),
+            name: "restart".into(),
+            content: serde_json::json!({"sql":"SELECT restart_marker"}),
+            created_at_ms: 1,
+        })
+        .unwrap();
+    drop(store);
+    let restarted = Persistence::open(dir.path(), secrets.clone()).unwrap();
+    assert_eq!(
+        restarted.documents(p.id, "saved").unwrap()[0]
+            .content["sql"],
+        "SELECT restart_marker"
+    );
+    drop(restarted);
+    let _ = secrets.delete("sql-key/v1");
 }
