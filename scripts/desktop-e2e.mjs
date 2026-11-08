@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { runNativePhase } from './native-benchmark.mjs';
 const data = mkdtempSync(path.join(tmpdir(), 'database-studio-native-'));
 const env = {
   ...process.env,
@@ -31,7 +32,42 @@ try {
     'src-tauri/tauri.e2e.conf.json',
     '--no-bundle',
   ]);
-  process.exitCode = built || run(['exec', 'wdio', 'run', 'wdio.conf.mjs']);
+  if (built) {
+    process.exitCode = built;
+  } else {
+    const idleGateFile = path.join(data, 'native-idle-gate');
+    const idleSampleCompleteFile = path.join(data, 'native-idle-sampled');
+    const wdioArgs = ['exec', 'wdio', 'run', 'wdio.conf.mjs'];
+    const first = await runNativePhase({
+      pnpm,
+      args: wdioArgs,
+      env: {
+        ...env,
+        STUDIO_E2E_PERSIST_PROFILE: '1',
+        STUDIO_NATIVE_IDLE_GATE_FILE: idleGateFile,
+        STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE: idleSampleCompleteFile,
+      },
+      label: 'initial',
+      idleGateFile,
+      idleSampleCompleteFile,
+    });
+    process.exitCode = first;
+    if (!first) {
+      process.exitCode = await runNativePhase({
+        pnpm,
+        args: wdioArgs,
+        env: {
+          ...env,
+          STUDIO_E2E_RESTART_CHECK: '1',
+          STUDIO_NATIVE_IDLE_GATE_FILE: idleGateFile,
+          STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE: idleSampleCompleteFile,
+        },
+        label: 'restart',
+        idleGateFile,
+        idleSampleCompleteFile,
+      });
+    }
+  }
 } finally {
   rmSync(data, { recursive: true, force: true });
 }

@@ -1,6 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 mkdirSync('test-results/native', { recursive: true });
 const request = (operation, args = {}) =>
@@ -10,6 +10,32 @@ const request = (operation, args = {}) =>
     operation,
     args,
   );
+const restartCheck = process.env.STUDIO_E2E_RESTART_CHECK === '1';
+const persistProfile = process.env.STUDIO_E2E_PERSIST_PROFILE === '1';
+
+before(async () => {
+  const idleGateFile = process.env.STUDIO_NATIVE_IDLE_GATE_FILE;
+  const idleSampleCompleteFile =
+    process.env.STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE;
+  console.log(
+    'CONSUMER_BACKPRESSURE',
+    JSON.stringify({
+      measured: false,
+      limitation:
+        'current WDIO Tauri invoke surface exposes core.invoke but no deterministic Channel hook for withholding ACK or closing the consumer',
+    }),
+  );
+  if (idleGateFile) {
+    await browser.pause(2500);
+    writeFileSync(idleGateFile, `${Date.now()}\n`);
+    if (idleSampleCompleteFile && process.platform === 'linux') {
+      await browser.waitUntil(() => existsSync(idleSampleCompleteFile), {
+        timeout: 10000,
+        timeoutMsg: 'Native idle RSS sample did not complete',
+      });
+    }
+  }
+});
 // Embedded WebKit option-click does not dispatch select change; dispatch a DOM change.
 const select = (label, value) =>
   browser.execute(
@@ -38,6 +64,7 @@ async function waitExecution(id) {
   return request('execution', { execution_id: id });
 }
 describe('Native desktop with real database adapters', () => {
+  if (restartCheck) return;
   for (const engine of process.env.STUDIO_E2E_ENGINE
     ? [process.env.STUDIO_E2E_ENGINE]
     : ['Postgres', 'MySql'])
@@ -266,6 +293,7 @@ describe('Native desktop with real database adapters', () => {
       await expect($('.grid-tools')).toHaveText(
         expect.stringContaining('2 rows'),
       );
+
       await $('button[aria-label="Pilih row 1"]').click();
       await $('button=Copy rows').click();
       await expect($('.grid-tools')).toHaveText(
@@ -328,9 +356,43 @@ describe('Native desktop with real database adapters', () => {
       await browser.saveScreenshot(
         `test-results/native/${engine.toLowerCase()}-workspace.png`,
       );
-      await request('delete_profile', {
-        connection_id: profile.id,
-        force: true,
-      });
+      if (!persistProfile) {
+        await request('delete_profile', {
+          connection_id: profile.id,
+          force: true,
+        });
+      }
+    });
+});
+
+describe('Native desktop restart persistence', () => {
+  if (!restartCheck) return;
+
+  for (const engine of process.env.STUDIO_E2E_ENGINE
+    ? [process.env.STUDIO_E2E_ENGINE]
+    : ['Postgres', 'MySql'])
+    it(`${engine}: restores the persisted profile after a real app restart`, async () => {
+      const name = `E2E ${engine}`;
+      const profiles = await request('profiles');
+      const profile = profiles.find((candidate) => candidate.name === name);
+      assert(profile, `${name} was not persisted before restart`);
+      console.log(
+        'PROFILE_RESTART',
+        JSON.stringify({ engine, profile_id: profile.id, restored: true }),
+      );
+
+      try {
+        const session = await request('connect', { connection_id: profile.id });
+        await request('disconnect', { session_id: session.id, force: true });
+        console.log(
+          'CREDENTIAL_RESTART',
+          JSON.stringify({ engine, restored: true }),
+        );
+      } finally {
+        await request('delete_profile', {
+          connection_id: profile.id,
+          force: true,
+        });
+      }
     });
 });
