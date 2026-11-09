@@ -327,6 +327,74 @@ pub struct MetadataResponse {
     pub editing: Option<EditingMetadata>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SchemaChangeRequest {
+    pub table: ObjectId,
+    pub operation: SchemaOperation,
+    #[serde(default)]
+    pub confirmation: Option<DestructiveConfirmation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DestructiveConfirmation {
+    pub confirmed: bool,
+    pub typed_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SchemaOperation {
+    CreateTable { columns: Vec<SchemaColumn> },
+    RenameTable { new_name: String },
+    DropTable,
+    AddColumn { column: SchemaColumn },
+    AlterColumn { column: SchemaColumn },
+    RenameColumn { name: String, new_name: String },
+    DropColumn { name: String },
+    CreateIndex { index: SchemaIndex },
+    DropIndex { name: String },
+    AddConstraint { constraint: SchemaConstraint },
+    DropConstraint { name: String, kind: SchemaConstraintKind },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaConstraintKind {
+    PrimaryKey,
+    Unique,
+    ForeignKey,
+    Check,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SchemaColumn {
+    pub name: String,
+    pub data_type: String,
+    #[serde(default = "default_true")]
+    pub nullable: bool,
+    #[serde(default)]
+    pub default: Option<DbValue>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SchemaIndex {
+    pub name: String,
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub unique: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SchemaConstraint {
+    PrimaryKey { name: String, columns: Vec<String> },
+    Unique { name: String, columns: Vec<String> },
+    ForeignKey { name: String, columns: Vec<String>, referenced_table: ObjectId, referenced_columns: Vec<String> },
+    Check { name: String, expression: String },
+}
+
+fn default_true() -> bool { true }
+
 #[cfg(test)]
 mod tests {
     use super::*;

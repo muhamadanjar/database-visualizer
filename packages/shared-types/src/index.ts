@@ -81,6 +81,28 @@ export interface Metadata {
     warnings: string[];
   } | null;
 }
+export type SchemaLiteral = { type: 'null' | 'boolean' | 'signed' | 'unsigned' | 'float' | 'decimal' | 'text' | 'date' | 'time' | 'timestamp'; value: null | boolean | number | string };
+export interface SchemaColumn { name: string; data_type: string; nullable?: boolean; default?: SchemaLiteral; }
+export interface SchemaIndex { name: string; columns: string[]; unique?: boolean; }
+export type SchemaConstraint =
+  | { kind: 'primary_key'; name: string; columns: string[] }
+  | { kind: 'unique'; name: string; columns: string[] }
+  | { kind: 'foreign_key'; name: string; columns: string[]; referenced_table: ObjectId; referenced_columns: string[] }
+  | { kind: 'check'; name: string; expression: string };
+export type SchemaOperation =
+  | { type: 'create_table'; columns: SchemaColumn[] }
+  | { type: 'rename_table'; new_name: string }
+  | { type: 'drop_table' }
+  | { type: 'add_column'; column: SchemaColumn }
+  | { type: 'alter_column'; column: SchemaColumn }
+  | { type: 'rename_column'; name: string; new_name: string }
+  | { type: 'drop_column'; name: string }
+  | { type: 'create_index'; index: SchemaIndex }
+  | { type: 'drop_index'; name: string }
+  | { type: 'add_constraint'; constraint: SchemaConstraint }
+  | { type: 'drop_constraint'; name: string; kind: 'primary_key' | 'unique' | 'foreign_key' | 'check' };
+export interface SchemaChangeRequest { table: ObjectId; operation: SchemaOperation; confirmation?: { confirmed: boolean; typed_name: string }; }
+export interface SchemaPreview { sql: string; destructive: boolean; affected_name: string | null; }
 export interface Cell {
   kind: string;
   value: string | null;

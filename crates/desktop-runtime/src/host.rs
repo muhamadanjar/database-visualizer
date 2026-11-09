@@ -617,6 +617,47 @@ impl DesktopHost {
                     serde_json::json!({"execution_id":self.start(id("session_id")?,sql.into()).await?}),
                 )
             }
+            "schema_preview" => {
+                let connection = id("connection_id")?;
+                let request: db_types::SchemaChangeRequest = serde_json::from_value(
+                    args.get("request").cloned().ok_or_else(|| error("INVALID_SCHEMA_CHANGE", "Schema change required"))?,
+                ).map_err(json_error)?;
+                let profile = self.persistence.profile(connection)?;
+                serde_json::to_value(db_core::schema_preview_for_database(profile.engine, &profile.database, &request)?).map_err(json_error)
+            }
+            "schema_apply" => {
+                let connection_id = id("connection_id")?;
+                let request: db_types::SchemaChangeRequest = serde_json::from_value(
+                    args.get("request").cloned().ok_or_else(|| error("INVALID_SCHEMA_CHANGE", "Schema change required"))?,
+                ).map_err(json_error)?;
+                let profile = self.persistence.profile(connection_id)?;
+                // The connection id selects credentials/profile context only.
+                // DDL never borrows a SQL-tab session: this host owns a fresh,
+                // auto-commit session and closes it after terminal execution.
+                let preview = db_core::schema_preview_for_database(profile.engine, &profile.database, &request)?;
+                db_core::require_confirmation(&preview, request.confirmation.as_ref())?;
+                let session = self.connect(connection_id, None).await?;
+                let result = async {
+                    self.start(session.id, preview.sql).await
+                }.await;
+                let execution_id = match result {
+                    Ok(id) => id,
+                    Err(error) => {
+                        let _ = self.disconnect(session.id, true).await;
+                        return Err(error);
+                    }
+                };
+                let host = self.clone();
+                tokio::spawn(async move {
+                    // Disconnect only after the normal terminal cleanup has
+                    // completed. A cleanup timeout leaves the outcome/session
+                    // unresolved rather than pretending the DDL was rolled back.
+                    if host.wait_execution(execution_id).await.is_ok() {
+                        let _ = host.disconnect(session.id, true).await;
+                    }
+                });
+                Ok(serde_json::json!({"execution_id": execution_id}))
+            }
             "table" => {
                 let session = id("session_id")?;
                 let profile = lock(&self.sessions)?

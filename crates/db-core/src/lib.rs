@@ -1,10 +1,12 @@
 //! Session coordination and bounded query streams, independent of concrete drivers.
 mod runtime;
 mod script;
+mod schema;
 use async_trait::async_trait;
 use db_types::*;
 pub use runtime::*;
 pub use script::*;
+pub use schema::{preview as schema_preview, preview_for_database as schema_preview_for_database, require_confirmation, SchemaPreview};
 use sqlparser::{
     ast::Statement,
     dialect::{MySqlDialect, PostgreSqlDialect},
