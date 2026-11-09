@@ -388,3 +388,99 @@ it('loads document headers, pulls one SQL document, and saves with its own ID', 
   expect(useWorkspace.getState().tabs[0].id).not.toBe(header.id);
   vi.restoreAllMocks();
 });
+
+it('enters table edit mode from Data and returns through the draft guard', async () => {
+  const object = {
+    engine: 'Postgres' as const,
+    database: profile.database,
+    schema: 'public',
+    name: 'customers',
+    kind: 'Table' as const,
+  };
+  const execution = {
+    id: 'execution-1',
+    session_id: 'session-1',
+    connection_id: profile.id,
+    status: 'Completed' as const,
+    results: [],
+    error: null,
+    started_at_ms: 1,
+    finished_at_ms: 2,
+    persistence_error: null,
+  };
+  useWorkspace.setState({
+    tabs: [
+      {
+        id: 'table-tab',
+        connectionId: profile.id,
+        title: object.name,
+        sql: '',
+        object,
+        inspector: true,
+        execution,
+      },
+    ],
+    activeId: 'table-tab',
+  });
+  const request = vi.fn(async (operation: string) => {
+    if (operation === 'profiles') return [profile];
+    if (operation === 'metadata')
+      return {
+        objects: [object],
+        columns: [
+          {
+            name: 'id',
+            data_type: 'integer',
+            nullable: false,
+            default: null,
+            ordinal: 0,
+          },
+        ],
+        indexes: [],
+        constraints: [],
+        ddl: null,
+        editing: {
+          primary_key: ['id'],
+          generated: [],
+          transactional: true,
+          warnings: [],
+        },
+      };
+    if (operation === 'layout' || operation === 'recent_files') return [];
+    if (operation === 'edit_snapshot')
+      return {
+        token: 'snapshot-token',
+        offset: 0,
+        columns: [
+          {
+            name: 'id',
+            data_type: 'integer',
+            nullable: false,
+            default: null,
+            ordinal: 0,
+          },
+        ],
+        rows: [],
+        primary_key: ['id'],
+        generated: [],
+        warnings: [],
+      };
+    return null;
+  });
+  const transport = {
+    request,
+    watch: async () => () => {},
+  } as unknown as DatabaseTransport;
+  render(<Workspace transport={transport} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Data' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit table' }));
+  expect(await screen.findByRole('button', { name: 'Tambah baris' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Kembali ke Data' }));
+  expect(await screen.findByRole('button', { name: 'Edit table' })).toBeInTheDocument();
+  expect(request).toHaveBeenCalledWith(
+    'edit_discard',
+    expect.objectContaining({ tab_id: 'table-tab' }),
+  );
+});

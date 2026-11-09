@@ -1640,6 +1640,7 @@ function Inspector({
   onNames: (names: string[]) => void;
 }) {
   const [section, setSection] = useState('Columns');
+  const [editing, setEditing] = useState(false);
   const [offset, setOffset] = useState(0);
   const [limit, setLimit] = useState(100);
   const [sort, setSort] = useState('');
@@ -1667,6 +1668,11 @@ function Inspector({
   const queryable =
     (transport.capabilities?.execute ?? true) &&
     ['Table', 'View', 'MaterializedView'].includes(tab.object!.kind);
+  const editMetadata = metadata.data?.editing;
+  const editable =
+    (transport.capabilities?.execute ?? true) &&
+    editMetadata?.transactional === true &&
+    Boolean(editMetadata.primary_key.length);
   const data = async (next = offset, sortColumn = sort, desc = descending) => {
     try {
       const current =
@@ -1724,19 +1730,22 @@ function Inspector({
           'Constraints',
           'Foreign Keys',
           'DDL',
-          ...((transport.capabilities?.execute ?? true) &&
-          metadata.data?.editing?.transactional &&
-          metadata.data.editing.primary_key.length
-            ? ['Edit']
-            : []),
         ].map((name) => (
           <button
             key={name}
             disabled={name === 'Data' && !queryable}
             className={section === name ? 'selected' : ''}
             onClick={() => {
+              if (editing && name !== 'Data') {
+                void discardEditDrafts(transport, tab.id).then((ok) => {
+                  if (!ok) return;
+                  setEditing(false);
+                  setSection(name);
+                });
+                return;
+              }
               setSection(name);
-              if (name === 'Data' && !tab.execution) void data();
+              if (name === 'Data' && !tab.execution && !editing) void data();
             }}
           >
             {name}
@@ -1749,6 +1758,18 @@ function Inspector({
         </p>
       ) : metadata.isPending ? (
         <p className="muted">Memuat definisi…</p>
+      ) : section === 'Data' && editing ? (
+        <TableEditor
+          transport={transport}
+          connection={profile.id}
+          object={tab.object!}
+          tabId={tab.id}
+          onExit={() =>
+            void discardEditDrafts(transport, tab.id).then((ok) => {
+              if (ok) setEditing(false);
+            })
+          }
+        />
       ) : section === 'Data' ? (
         <>
           <div className="table-controls">
@@ -1780,6 +1801,14 @@ function Inspector({
               onChange={(e) => setFilter(e.target.value)}
             />
             <button onClick={() => void data(0)}>Terapkan / Refresh</button>
+            {editable ? (
+              <button
+                className="primary"
+                onClick={() => setEditing(true)}
+              >
+                Edit table
+              </button>
+            ) : null}
             <div className="toolbar-spacer" />
             <button
               disabled={offset === 0}
@@ -1816,13 +1845,6 @@ function Inspector({
             <p className="error-text">{tab.execution.error.message}</p>
           ) : null}
         </>
-      ) : section === 'Edit' ? (
-        <TableEditor
-          transport={transport}
-          connection={profile.id}
-          object={tab.object!}
-          tabId={tab.id}
-        />
       ) : section === 'DDL' ? (
         <DefinitionText
           transport={transport}

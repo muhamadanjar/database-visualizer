@@ -17,11 +17,13 @@ export function TableEditor({
   connection,
   object,
   tabId,
+  onExit,
 }: {
   transport: DatabaseTransport;
   connection: string;
   object: ObjectId;
   tabId: string;
+  onExit: () => void;
 }) {
   const draft = useEditDrafts((s) => s.drafts[tabId]);
   const put = useEditDrafts((s) => s.put);
@@ -201,6 +203,8 @@ export function TableEditor({
   return (
     <section className="table-editor">
       <div className="table-controls">
+        <button onClick={onExit}>Kembali ke Data</button>
+        <span className="toolbar-divider" />
         <button
           disabled={loading || draft.state === 'Applying'}
           onClick={() => void load()}
