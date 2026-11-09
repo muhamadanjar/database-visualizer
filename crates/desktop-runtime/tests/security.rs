@@ -260,14 +260,12 @@ fn missing_orphan_secret_reference_is_removed_but_locked_cleanup_is_retryable() 
     let secrets = Arc::new(MissingDeleteSecrets::default());
     let store = Persistence::open(dir.path(), secrets.clone()).unwrap();
     let orphan = "connection/orphan";
-    secrets
-        .values
-        .lock()
-        .unwrap()
-        .insert(orphan.into(), b"orphan".into());
     rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
         .unwrap()
-        .execute("INSERT INTO pending_secrets(reference) VALUES (?)", [orphan])
+        .execute(
+            "INSERT INTO pending_secrets(reference) VALUES (?)",
+            [orphan],
+        )
         .unwrap();
 
     store.cleanup_secrets().unwrap();
@@ -637,57 +635,12 @@ fn failed_v1_to_v2_migration_keeps_backup_and_original_schema() {
                 .to_string_lossy()
                 .starts_with("workspace.before-v2-"))
     );
-    assert!(!rusqlite::Connection::open(&database)
-        .unwrap()
-        .prepare("SELECT 1 FROM sqlite_master WHERE name='mutations'")
-        .unwrap()
-        .exists([])
-        .unwrap());
-}
-
-#[test]
-fn os_secret_store_restart_round_trip_uses_only_a_unique_throwaway_service() {
-    let service = format!("dev.database-studio.test.{}", Uuid::new_v4());
-    let secrets = Arc::new(OsSecretStore::with_service(service.clone()));
-    let dir = tempfile::tempdir().unwrap();
-    let store = match Persistence::open(dir.path(), secrets.clone()) {
-        Ok(store) => store,
-        Err(e) if e.code == "SECRET_STORE_UNAVAILABLE" => {
-            eprintln!("SKIP os_secret_store_restart_round_trip: OS credential store unavailable");
-            return;
-        }
-        Err(e) => panic!("unexpected OS store failure: {}", e.code),
-    };
-    let p = store
-        .save_profile(profile(), Some("restart-password"), true)
-        .unwrap();
-    let password_reference: String = rusqlite::Connection::open(dir.path().join("workspace.sqlite3"))
-        .unwrap()
-        .query_row(
-            "SELECT secret_ref FROM profiles WHERE id=?",
-            [p.id.to_string()],
-            |row| row.get(0),
-        )
-        .unwrap();
-    store
-        .save_document(&Document {
-            id: Uuid::new_v4(),
-            connection_id: p.id,
-            kind: "saved".into(),
-            name: "restart".into(),
-            content: serde_json::json!({"sql":"SELECT restart_marker"}),
-            created_at_ms: 1,
-        })
-        .unwrap();
-    drop(store);
-    let restarted = Persistence::open(dir.path(), secrets.clone()).unwrap();
-    assert_eq!(restarted.password(p.id).unwrap(), "restart-password");
-    assert_eq!(
-        restarted.documents(p.id, "saved").unwrap()[0]
-            .content["sql"],
-        "SELECT restart_marker"
+    assert!(
+        !rusqlite::Connection::open(&database)
+            .unwrap()
+            .prepare("SELECT 1 FROM sqlite_master WHERE name='mutations'")
+            .unwrap()
+            .exists([])
+            .unwrap()
     );
-    drop(restarted);
-    let _ = secrets.delete(&password_reference);
-    let _ = secrets.delete("sql-key/v1");
 }

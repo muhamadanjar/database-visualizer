@@ -52,7 +52,8 @@ function processTree(root) {
 function appPids(baseline) {
   return procPids().filter(
     (pid) =>
-      !baseline.has(pid) && commandLine(pid).includes('database-studio-desktop'),
+      !baseline.has(pid) &&
+      commandLine(pid).includes('database-studio-desktop'),
   );
 }
 
@@ -70,7 +71,8 @@ export async function runNativePhase({
   try {
     unlinkSync(idleSampleCompleteFile);
   } catch {}
-  const baseline = new Set(procPids());
+  const baseline =
+    process.platform === 'linux' ? new Set(procPids()) : undefined;
   const child = spawn(pnpm, args, {
     env,
     stdio: 'inherit',
@@ -114,8 +116,11 @@ export async function runNativePhase({
   if (idleGateSeen) {
     const roots = appPids(baseline);
     const pids = new Set(roots.flatMap((pid) => processTree(pid)));
-    idleRssKb = [...pids].reduce((total, pid) => total + rssKb(pid), 0);
-    writeFileSync(idleSampleCompleteFile, `${Date.now()}\n`);
+    if (pids.size) {
+      idleRssKb = [...pids].reduce((total, pid) => total + rssKb(pid), 0);
+      if (idleRssKb > 0)
+        writeFileSync(idleSampleCompleteFile, `${Date.now()}\n`);
+    }
   }
   const exitCode = await exit;
   console.log(
@@ -130,10 +135,10 @@ export async function runNativePhase({
       },
       whole_process_idle_rss_kb: idleRssKb ?? null,
       instrumentation:
-        idleGateSeen
+        idleRssKb > 0
           ? 'Linux /proc process tree sampled after the explicit pre-work idle gate and before database connections'
-          : 'missing: native process or pre-work idle gate was not observable',
+          : 'missing: native process or positive idle RSS was not observable',
     }),
   );
-  return exitCode;
+  return exitCode || (idleRssKb > 0 ? 0 : 1);
 }

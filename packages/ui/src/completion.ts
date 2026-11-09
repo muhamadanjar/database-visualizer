@@ -134,30 +134,44 @@ export function completions(
         aliases.set(alias.toLowerCase(), table);
     }
   const suffix = source.match(/([\w$]+)\.([\w$]*)$/);
-  let values: string[];
+  const prefix = (
+    suffix?.[2] ??
+    source.match(/[\w$]*$/)?.[0] ??
+    ''
+  ).toLowerCase();
+  const matches: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string) => {
+    if (!seen.has(value) && value.toLowerCase().startsWith(prefix)) {
+      seen.add(value);
+      matches.push(value);
+    }
+  };
   if (suffix) {
-    const target = aliases.get(suffix[1].toLowerCase()) ?? suffix[1];
-    values = names
-      .filter(
-        (n) =>
-          n.toLowerCase().startsWith(target.toLowerCase() + '.') ||
-          (!target.includes('.') &&
-            n
-              .toLowerCase()
-              .startsWith(target.split('.').at(-1)!.toLowerCase() + '.')),
-      )
-      .map((n) => n.slice(n.lastIndexOf('.') + 1));
-  } else
-    values = [
+    const target =
+      (aliases.get(suffix[1].toLowerCase()) ?? suffix[1]).toLowerCase() + '.';
+    for (const name of names) {
+      if (name.toLowerCase().startsWith(target)) {
+        add(name.slice(name.lastIndexOf('.') + 1));
+        if (matches.length === 200) break;
+      }
+    }
+  } else {
+    for (const value of [
       ...common,
       ...(engine === 'Postgres'
         ? ['RETURNING', 'ILIKE', 'ON CONFLICT']
         : ['SHOW', 'DESCRIBE', 'ON DUPLICATE KEY UPDATE']),
-      ...names,
-      ...aliases.keys(),
-    ];
-  const prefix = suffix?.[2] ?? source.match(/[\w$]*$/)?.[0] ?? '';
-  return [...new Set(values)]
-    .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()))
-    .slice(0, 200);
+    ])
+      add(value);
+    for (const name of names) {
+      add(name);
+      if (matches.length === 200) return matches;
+    }
+    for (const alias of aliases.keys()) {
+      add(alias);
+      if (matches.length === 200) break;
+    }
+  }
+  return matches;
 }

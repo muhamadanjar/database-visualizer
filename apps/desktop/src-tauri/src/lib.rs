@@ -3,8 +3,8 @@ use desktop_runtime::{DesktopHost, IPC_VERSION, OsSecretStore};
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 use tauri::{Manager, State, ipc::Channel};
@@ -14,6 +14,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 struct Watch {
+    id: u64,
     sequence: u64,
     credit: Arc<Semaphore>,
     outstanding: bool,
@@ -23,6 +24,7 @@ struct AppState {
     watches: Mutex<HashMap<Uuid, Watch>>,
 }
 static NEXT_WATCH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static NEXT_WATCH_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Watch {
     fn acknowledge(&mut self, sequence: u64) -> bool {
@@ -32,6 +34,28 @@ impl Watch {
             true
         } else {
             false
+        }
+    }
+}
+
+fn remove_watch_entry(
+    watches: &mut HashMap<Uuid, Watch>,
+    execution_id: Uuid,
+    watch_id: u64,
+) -> bool {
+    if watches
+        .get(&execution_id)
+        .is_some_and(|watch| watch.id == watch_id)
+    {
+        return watches.remove(&execution_id).is_some();
+    }
+    false
+}
+
+impl AppState {
+    fn remove_watch(&self, execution_id: Uuid, watch_id: u64) {
+        if let Ok(mut watches) = self.watches.lock() {
+            remove_watch_entry(&mut watches, execution_id, watch_id);
         }
     }
 }
@@ -205,6 +229,7 @@ async fn watch_execution(
     }
     state.host.snapshot(execution_id)?;
     let credit = Arc::new(Semaphore::new(1));
+    let watch_id = NEXT_WATCH_ID.fetch_add(1, Ordering::Relaxed);
     {
         let mut watches = state.watches.lock().map_err(|_| error())?;
         if watches.contains_key(&execution_id) {
@@ -217,6 +242,7 @@ async fn watch_execution(
         watches.insert(
             execution_id,
             Watch {
+                id: watch_id,
                 sequence: 0,
                 outstanding: false,
                 credit: credit.clone(),
@@ -226,6 +252,7 @@ async fn watch_execution(
     let host = state.host.clone();
     tauri::async_runtime::spawn(async move {
         let mut previous = String::new();
+        let mut available_credit = credit.clone().acquire_owned().await.ok();
         while let Ok(info) = host.snapshot(execution_id) {
             let signature = format!(
                 "{:?}/{:?}/{:?}",
@@ -234,17 +261,10 @@ async fn watch_execution(
                 info.persistence_error.as_ref().map(|e| &e.code)
             );
             if previous != signature {
-                let permit = match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    credit.clone().acquire_owned(),
-                )
-                .await
-                {
-                    Ok(Ok(p)) => p,
-                    _ => {
-                        let _ = host.cancel(execution_id).await;
-                        break;
-                    }
+                let Some(permit) = available_credit.take() else {
+                    app.state::<AppState>().remove_watch(execution_id, watch_id);
+                    let _ = host.cancel(execution_id).await;
+                    break;
                 };
                 permit.forget();
                 let sequence = next_watch_sequence();
@@ -255,77 +275,30 @@ async fn watch_execution(
                     watch.outstanding = true;
                 }
                 // Small notification only. Rows/columns remain behind bounded page/snapshot requests.
-                if on_event.send(serde_json::json!({"execution_id":execution_id,"sequence":sequence,"status":info.status,"rows":info.results.iter().map(|r|r.rows).sum::<u64>()})).is_err(){let _=host.cancel(execution_id).await;break;}
+                if on_event.send(serde_json::json!({"execution_id":execution_id,"sequence":sequence,"status":info.status,"rows":info.results.iter().map(|r|r.rows).sum::<u64>()})).is_err(){app.state::<AppState>().remove_watch(execution_id, watch_id);let _=host.cancel(execution_id).await;break;}
                 previous = signature;
                 if info.status.terminal() {
                     break;
                 }
+                available_credit = match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    credit.clone().acquire_owned(),
+                )
+                .await
+                {
+                    Ok(Ok(permit)) => Some(permit),
+                    _ => {
+                        app.state::<AppState>().remove_watch(execution_id, watch_id);
+                        let _ = host.cancel(execution_id).await;
+                        break;
+                    }
+                };
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        if let Ok(mut watches) = app.state::<AppState>().watches.lock() {
-            watches.remove(&execution_id);
-        }
+        app.state::<AppState>().remove_watch(execution_id, watch_id);
     });
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stale_ack_from_old_watch_cannot_replenish_new_watch_credit() {
-        let execution_id = Uuid::new_v4();
-        let old_credit = Arc::new(Semaphore::new(1));
-        let old_sequence = next_watch_sequence();
-        let mut watches = HashMap::new();
-        watches.insert(
-            execution_id,
-            Watch {
-                sequence: old_sequence,
-                credit: old_credit.clone(),
-                outstanding: true,
-            },
-        );
-        let old_permit = old_credit.try_acquire_owned().unwrap();
-        old_permit.forget();
-        watches.remove(&execution_id);
-
-        let new_credit = Arc::new(Semaphore::new(1));
-        let new_sequence = next_watch_sequence();
-        watches.insert(
-            execution_id,
-            Watch {
-                sequence: new_sequence,
-                credit: new_credit.clone(),
-                outstanding: true,
-            },
-        );
-        let new_permit = new_credit.try_acquire_owned().unwrap();
-        new_permit.forget();
-
-        assert!(!watches
-            .get_mut(&execution_id)
-            .unwrap()
-            .acknowledge(old_sequence));
-        assert!(new_credit.try_acquire().is_err());
-    }
-
-    #[test]
-    fn duplicate_ack_cannot_replenish_credit() {
-        let credit = Arc::new(Semaphore::new(0));
-        let mut watch = Watch {
-            sequence: 9,
-            credit: credit.clone(),
-            outstanding: true,
-        };
-
-        assert!(watch.acknowledge(9));
-        assert!(credit.try_acquire().is_ok());
-        assert!(!watch.acknowledge(9));
-        assert!(credit.try_acquire().is_err());
-    }
 }
 
 pub fn run() {
@@ -346,10 +319,16 @@ pub fn run() {
             #[cfg(not(feature = "desktop-e2e"))]
             let secrets = OsSecretStore::default();
             #[cfg(feature = "desktop-e2e")]
-            let secrets = OsSecretStore::with_service(format!(
-                "dev.database-studio.e2e.{}",
-                std::process::id()
-            ));
+            let secret_namespace = std::env::var_os("DATABASE_STUDIO_TEST_DATA")
+                .and_then(|path| {
+                    std::path::PathBuf::from(path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| std::process::id().to_string());
+            #[cfg(feature = "desktop-e2e")]
+            let secrets =
+                OsSecretStore::with_service(format!("dev.database-studio.e2e.{secret_namespace}"));
             let host = DesktopHost::open(directory, Arc::new(secrets))?;
             app.manage(AppState {
                 host,
@@ -366,4 +345,68 @@ pub fn run() {
                 let _ = tauri::async_runtime::block_on(host.shutdown());
             }
         });
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_watch_cannot_replenish_or_remove_new_watch() {
+        let execution_id = Uuid::new_v4();
+        let old_credit = Arc::new(Semaphore::new(1));
+        let old_sequence = next_watch_sequence();
+        let mut watches = HashMap::new();
+        watches.insert(
+            execution_id,
+            Watch {
+                id: 1,
+                sequence: old_sequence,
+                credit: old_credit.clone(),
+                outstanding: true,
+            },
+        );
+        let old_permit = old_credit.try_acquire_owned().unwrap();
+        old_permit.forget();
+        assert!(remove_watch_entry(&mut watches, execution_id, 1));
+
+        let new_credit = Arc::new(Semaphore::new(1));
+        let new_sequence = next_watch_sequence();
+        watches.insert(
+            execution_id,
+            Watch {
+                id: 2,
+                sequence: new_sequence,
+                credit: new_credit.clone(),
+                outstanding: true,
+            },
+        );
+        assert!(!remove_watch_entry(&mut watches, execution_id, 1));
+        assert_eq!(watches.get(&execution_id).map(|watch| watch.id), Some(2));
+        let new_permit = new_credit.clone().try_acquire_owned().unwrap();
+        new_permit.forget();
+
+        assert!(
+            !watches
+                .get_mut(&execution_id)
+                .unwrap()
+                .acknowledge(old_sequence)
+        );
+        assert!(new_credit.try_acquire().is_err());
+    }
+
+    #[test]
+    fn duplicate_ack_cannot_replenish_credit() {
+        let credit = Arc::new(Semaphore::new(0));
+        let mut watch = Watch {
+            id: 3,
+            sequence: 9,
+            credit: credit.clone(),
+            outstanding: true,
+        };
+
+        assert!(watch.acknowledge(9));
+        let _permit = credit.try_acquire().unwrap();
+        assert!(!watch.acknowledge(9));
+        assert!(credit.try_acquire().is_err());
+    }
 }

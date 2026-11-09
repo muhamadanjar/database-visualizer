@@ -337,3 +337,33 @@ pub fn cleanup_spools(directory: &Path) -> DbResult<()> {
     }
     Ok(())
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disk_full_keeps_previous_rows_and_releases_failed_reservation() {
+        let directory = tempfile::tempdir().unwrap();
+        let total = Arc::new(AtomicU64::new(0));
+        let mut spool = Spool::new(directory.path(), Uuid::new_v4(), total.clone()).unwrap();
+        spool.append(&[vec![DbValue::Text("kept".into())]]).unwrap();
+        let bytes = spool.bytes();
+        let file = spool
+            .file
+            .replace(OpenOptions::new().write(true).open("/dev/full").unwrap());
+
+        let error = spool
+            .append(&[vec![DbValue::Text("discarded".into())]])
+            .unwrap_err();
+        assert_eq!(error.code, "SPOOL_IO_ERROR");
+        spool.file = file;
+        assert_eq!(spool.bytes(), bytes);
+        assert_eq!(spool.rows(), 1);
+        assert_eq!(total.load(Ordering::Acquire), bytes);
+        assert_eq!(
+            spool.page(0, PAGE_ROWS).unwrap()[0][0].value.as_deref(),
+            Some("kept")
+        );
+    }
+}

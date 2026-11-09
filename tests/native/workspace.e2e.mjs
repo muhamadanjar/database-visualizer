@@ -17,14 +17,6 @@ before(async () => {
   const idleGateFile = process.env.STUDIO_NATIVE_IDLE_GATE_FILE;
   const idleSampleCompleteFile =
     process.env.STUDIO_NATIVE_IDLE_SAMPLE_COMPLETE_FILE;
-  console.log(
-    'CONSUMER_BACKPRESSURE',
-    JSON.stringify({
-      measured: false,
-      limitation:
-        'current WDIO Tauri invoke surface exposes core.invoke but no deterministic Channel hook for withholding ACK or closing the consumer',
-    }),
-  );
   if (idleGateFile) {
     await browser.pause(2500);
     writeFileSync(idleGateFile, `${Date.now()}\n`);
@@ -353,6 +345,80 @@ describe('Native desktop with real database adapters', () => {
         session_id: inspectorSession.id,
         force: true,
       });
+      if (engine === 'Postgres') {
+        const slowSession = await request('connect', {
+          connection_id: profile.id,
+        });
+        const slow = await request('execute', {
+          session_id: slowSession.id,
+          sql: 'SELECT pg_sleep(90)',
+        });
+        await browser.execute(
+          (executionId) =>
+            globalThis.__DATABASE_STUDIO_WATCH_NO_ACK__(
+              executionId,
+              '__PHASE2_NO_ACK_EVENTS__',
+            ),
+          slow.execution_id,
+        );
+        await browser.waitUntil(
+          async () =>
+            (await browser.tauri.execute(
+              () => globalThis.__PHASE2_NO_ACK_EVENTS__.length,
+            )) === 1,
+          { timeout: 5000, timeoutMsg: 'First watch event not delivered' },
+        );
+        await browser.waitUntil(
+          async () =>
+            (await request('execution', { execution_id: slow.execution_id }))
+              .status !== 'Running',
+          {
+            timeout: 40000,
+            timeoutMsg: 'Watch timeout did not cancel the slow execution',
+          },
+        );
+        const terminal = await request('execution', {
+          execution_id: slow.execution_id,
+        });
+        assert.equal(terminal.status, 'Cancelled');
+        const first = await browser.tauri.execute(
+          () => globalThis.__PHASE2_NO_ACK_EVENTS__,
+        );
+        assert.equal(first.length, 1, 'No more than one event without ACK');
+        await browser.execute(
+          (executionId) =>
+            globalThis.__DATABASE_STUDIO_WATCH_NO_ACK__(
+              executionId,
+              '__PHASE2_REWATCH_EVENTS__',
+            ),
+          slow.execution_id,
+        );
+        await browser.waitUntil(
+          async () =>
+            (await browser.tauri.execute(
+              () => globalThis.__PHASE2_REWATCH_EVENTS__.length,
+            )) === 1,
+          { timeout: 5000, timeoutMsg: 'Terminal rewatch not delivered' },
+        );
+        const next = await browser.tauri.execute(
+          () => globalThis.__PHASE2_REWATCH_EVENTS__,
+        );
+        assert.notEqual(first[0].sequence, next[0].sequence);
+        console.log(
+          'ACK_STRESS',
+          JSON.stringify({
+            engine,
+            unacked_events: first.length,
+            terminal_status: terminal.status,
+            rewatch_events: next.length,
+          }),
+        );
+        await request('close_execution', { execution_id: slow.execution_id });
+        await request('disconnect', {
+          session_id: slowSession.id,
+          force: true,
+        });
+      }
       await browser.saveScreenshot(
         `test-results/native/${engine.toLowerCase()}-workspace.png`,
       );
