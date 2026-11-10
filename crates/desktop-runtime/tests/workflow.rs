@@ -46,7 +46,7 @@ async fn desktop_host_scripts_sessions_history_and_cancellation() {
         let directory = tempfile::tempdir().unwrap();
         let host =
             DesktopHost::open(directory.path().into(), Arc::new(Secrets::default())).unwrap();
-        let profile = host
+        let mut profile = host
             .save_profile(
                 Profile {
                     id: Uuid::new_v4(),
@@ -182,9 +182,312 @@ async fn desktop_host_scripts_sessions_history_and_cancellation() {
                 >= 5
         );
         let table = format!("desktop_edit_{}", Uuid::new_v4().simple());
-        let execution = host.start(session.id,format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY,label VARCHAR(80)); INSERT INTO {table} VALUES(1,'original')")).await.unwrap();
+        let collation_column = if engine == Engine::Postgres {
+            ", collated TEXT COLLATE \"C\""
+        } else {
+            ""
+        };
+        let execution = host
+            .start(
+                session.id,
+                format!(
+                    "CREATE TABLE {table} (id INTEGER PRIMARY KEY,label VARCHAR(80){collation_column}); INSERT INTO {table} (id,label) VALUES(1,'original')"
+                ),
+            )
+            .await
+            .unwrap();
         assert_eq!(wait(&host, execution).await.status, QueryStatus::Completed);
         host.close_execution(execution).unwrap();
+        if engine == Engine::MySql {
+            let protected_table = format!("desktop_auto_{}", Uuid::new_v4().simple());
+            let create = host
+                .start(
+                    session.id,
+                    format!(
+                        "CREATE TABLE {protected_table} (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, note VARCHAR(20) COMMENT 'keep me', code VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(wait(&host, create).await.status, QueryStatus::Completed);
+            host.close_execution(create).unwrap();
+            let protected_object = ObjectId {
+                engine,
+                database: "studio_test".into(),
+                schema: None,
+                name: protected_table.clone(),
+                kind: ObjectKind::Table,
+            };
+            let alter = serde_json::json!({
+                "table": protected_object,
+                "operation": {
+                    "type": "alter_column",
+                    "column": {
+                        "name": "id",
+                        "data_type": "BIGINT",
+                        "nullable": false,
+                        "default": null
+                    }
+                }
+            });
+            let inspected = host
+                .request(serde_json::json!({
+                    "operation": "metadata",
+                    "args": {
+                        "connection_id": profile.id,
+                        "request": { "Inspect": { "object": protected_object } }
+                    }
+                }))
+                .await
+                .unwrap();
+            assert!(
+                inspected["columns"][0]["extra"]
+                    .as_str()
+                    .unwrap()
+                    .contains("auto_increment")
+            );
+            assert_eq!(inspected["columns"][1]["comment"], "keep me");
+            assert_eq!(inspected["table_collation"], "utf8mb4_general_ci");
+            assert_eq!(inspected["columns"][2]["collation"], "utf8mb4_bin");
+            let collation_error = host
+                .request(serde_json::json!({
+                    "operation": "schema_preview",
+                    "args": {
+                        "connection_id": profile.id,
+                        "request": {
+                            "table": protected_object,
+                            "operation": {
+                                "type": "alter_column",
+                                "column": {
+                                    "name": "code",
+                                    "data_type": "VARCHAR(30)",
+                                    "nullable": true,
+                                    "default": null
+                                }
+                            }
+                        }
+                    }
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(collation_error.code, "UNSUPPORTED_SCHEMA_CHANGE");
+            let comment_error = host
+                .request(serde_json::json!({
+                    "operation": "schema_preview",
+                    "args": {
+                        "connection_id": profile.id,
+                        "request": {
+                            "table": protected_object,
+                            "operation": {
+                                "type": "alter_column",
+                                "column": {
+                                    "name": "note",
+                                    "data_type": "VARCHAR(30)",
+                                    "nullable": true,
+                                    "default": null
+                                }
+                            }
+                        }
+                    }
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(comment_error.code, "UNSUPPORTED_SCHEMA_CHANGE");
+            let preview_error = host
+                .request(serde_json::json!({
+                    "operation": "schema_preview",
+                    "args": { "connection_id": profile.id, "request": alter.clone() }
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(preview_error.code, "UNSUPPORTED_SCHEMA_CHANGE");
+            let apply_error = host
+                .request(serde_json::json!({
+                    "operation": "schema_apply",
+                    "args": {
+                        "connection_id": profile.id,
+                        "expected_profile_revision": profile.revision,
+                        "request": {
+                            "table": protected_object,
+                            "operation": alter["operation"],
+                            "confirmation": { "confirmed": true, "typed_name": "id" }
+                        }
+                    }
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(apply_error.code, "UNSUPPORTED_SCHEMA_CHANGE");
+            let cleanup = host
+                .start(session.id, format!("DROP TABLE {protected_table}"))
+                .await
+                .unwrap();
+            assert_eq!(wait(&host, cleanup).await.status, QueryStatus::Completed);
+            host.close_execution(cleanup).unwrap();
+        }
+        let history_before_schema = host
+            .persistence
+            .documents(profile.id, "history")
+            .unwrap()
+            .len();
+
+        let schema_object = ObjectId {
+            engine,
+            database: "studio_test".into(),
+            schema: if engine == Engine::Postgres {
+                Some("public".into())
+            } else {
+                None
+            },
+            name: table.clone(),
+            kind: ObjectKind::Table,
+        };
+        if engine == Engine::Postgres {
+            let metadata = host
+                .request(serde_json::json!({
+                    "operation": "metadata",
+                    "args": {
+                        "connection_id": profile.id,
+                        "request": {
+                            "Inspect": { "object": schema_object.clone() }
+                        }
+                    }
+                }))
+                .await
+                .unwrap();
+            let collated = metadata["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|column| column["name"] == "collated")
+                .unwrap();
+            assert!(collated["collation"].as_str().is_some());
+            let error = host
+                .request(serde_json::json!({
+                    "operation": "schema_preview",
+                    "args": {
+                        "connection_id": profile.id,
+                        "request": {
+                            "table": schema_object.clone(),
+                            "operation": {
+                                "type": "alter_column",
+                                "column": {
+                                    "name": "collated",
+                                    "data_type": "TEXT",
+                                    "nullable": false,
+                                    "default": null
+                                }
+                            }
+                        }
+                    }
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "UNSUPPORTED_SCHEMA_CHANGE");
+        }
+        let default_value = format!(r"\'; DROP TABLE {table}; -- ignored");
+        let ddl = host
+            .request(serde_json::json!({
+                "operation": "schema_apply",
+                "args": {
+                    "connection_id": profile.id,
+                    "expected_profile_revision": profile.revision,
+                    "request": {
+                        "table": schema_object,
+                        "operation": {
+                            "type": "add_column",
+                            "column": {
+                                "name": "note",
+                                "data_type": "VARCHAR(255)",
+                                "nullable": false,
+                                "default": { "type": "text", "value": default_value }
+                            }
+                        }
+                    }
+                }
+            }))
+            .await
+            .unwrap();
+        let ddl_id = Uuid::parse_str(ddl["execution_id"].as_str().unwrap()).unwrap();
+        assert_eq!(wait(&host, ddl_id).await.status, QueryStatus::Completed);
+        host.close_execution(ddl_id).unwrap();
+        assert_eq!(
+            host.persistence
+                .documents(profile.id, "history")
+                .unwrap()
+                .len(),
+            history_before_schema
+        );
+        let verify = host
+            .start(session.id, format!("SELECT note FROM {table}"))
+            .await
+            .unwrap();
+        let result = wait(&host, verify).await;
+        assert_eq!(result.status, QueryStatus::Completed);
+        assert_eq!(
+            host.page(verify, result.results[0].id, 0, 1).unwrap()[0][0]
+                .value
+                .as_deref(),
+            Some(default_value.as_str())
+        );
+        host.close_execution(verify).unwrap();
+        if engine == Engine::Postgres {
+            host.auto_commit(session.id, false).await.unwrap();
+            let lock = host
+                .start(
+                    session.id,
+                    format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"),
+                )
+                .await
+                .unwrap();
+            assert_eq!(wait(&host, lock).await.status, QueryStatus::Completed);
+            host.close_execution(lock).unwrap();
+            let ddl = host
+                .request(serde_json::json!({
+                    "operation": "schema_apply",
+                    "args": {
+                        "connection_id": profile.id,
+                        "expected_profile_revision": profile.revision,
+                        "request": {
+                            "table": {
+                                "engine": "Postgres",
+                                "database": "studio_test",
+                                "schema": "public",
+                                "name": table,
+                                "kind": "Table"
+                            },
+                            "operation": {
+                                "type": "add_column",
+                                "column": {
+                                    "name": "blocked",
+                                    "data_type": "INTEGER",
+                                    "nullable": true,
+                                    "default": null
+                                }
+                            }
+                        }
+                    }
+                }))
+                .await
+                .unwrap();
+            let ddl_id = Uuid::parse_str(ddl["execution_id"].as_str().unwrap()).unwrap();
+            tokio::time::sleep(Duration::from_secs(11)).await;
+            let pending = host.snapshot(ddl_id).unwrap();
+            assert!(!pending.status.terminal());
+            assert!(host.session(pending.session_id).await.is_ok());
+            let rollback = host.start(session.id, "ROLLBACK".into()).await.unwrap();
+            assert_eq!(wait(&host, rollback).await.status, QueryStatus::Completed);
+            host.close_execution(rollback).unwrap();
+            host.auto_commit(session.id, true).await.unwrap();
+            assert_eq!(wait(&host, ddl_id).await.status, QueryStatus::Completed);
+            for _ in 0..100 {
+                if host.session(pending.session_id).await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(host.session(pending.session_id).await.is_err());
+            host.close_execution(ddl_id).unwrap();
+        }
         let tab = Uuid::new_v4();
         let key = Uuid::new_v4();
         let object = ObjectId {
@@ -199,7 +502,7 @@ async fn desktop_host_scripts_sessions_history_and_cancellation() {
             kind: ObjectKind::Table,
         };
         let snapshot = host.request(serde_json::json!({"operation":"edit_snapshot","args":{"connection_id":profile.id,"tab_id":tab,"object":object}})).await.unwrap();
-        let request = serde_json::json!({"operation":"edit_apply","args":{"connection_id":profile.id,"tab_id":tab,"idempotency_key":key,"batch":{"tab_id":tab,"token":snapshot["token"],"changes":[{"type":"update","row":0,"values":{"label":{"type":"value","value":"changed"}}}]}}});
+        let request = serde_json::json!({"operation":"edit_apply","args":{"connection_id":profile.id,"tab_id":tab,"expected_profile_revision":snapshot["profile_revision"],"idempotency_key":key,"batch":{"tab_id":tab,"token":snapshot["token"],"changes":[{"type":"update","row":0,"values":{"label":{"type":"value","value":"changed"}}}]}}});
         assert_eq!(
             host.request(request.clone()).await.unwrap()["state"],
             "Applying"
@@ -213,6 +516,44 @@ async fn desktop_host_scripts_sessions_history_and_cancellation() {
         assert_eq!(host.request(request).await.unwrap(), state);
         let receipt = host.request(serde_json::json!({"operation":"edit_readback","args":{"connection_id":profile.id,"tab_id":tab,"token":snapshot["token"]}})).await.unwrap();
         assert_eq!(receipt[0][1]["value"], "changed");
+        let stale_tab = Uuid::new_v4();
+        let stale_key = Uuid::new_v4();
+        let stale_snapshot = host
+            .request(serde_json::json!({
+                "operation": "edit_snapshot",
+                "args": {
+                    "connection_id": profile.id,
+                    "tab_id": stale_tab,
+                    "object": object
+                }
+            }))
+            .await
+            .unwrap();
+        profile = host
+            .save_profile(profile.clone(), Some("studio_test".into()), false)
+            .unwrap();
+        let stale_apply = host
+            .request(serde_json::json!({
+                "operation": "edit_apply",
+                "args": {
+                    "connection_id": profile.id,
+                    "tab_id": stale_tab,
+                    "expected_profile_revision": stale_snapshot["profile_revision"],
+                    "idempotency_key": stale_key,
+                    "batch": {
+                        "tab_id": stale_tab,
+                        "token": stale_snapshot["token"],
+                        "changes": [{
+                            "type": "update",
+                            "row": 0,
+                            "values": { "label": { "type": "value", "value": "stale" } }
+                        }]
+                    }
+                }
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(stale_apply.code, "SCHEMA_PROFILE_CHANGED");
 
         let execution = host
             .start(session.id, format!("SELECT label FROM {table}"))
@@ -226,6 +567,43 @@ async fn desktop_host_scripts_sessions_history_and_cancellation() {
             Some("changed")
         );
         host.close_execution(execution).unwrap();
+        let approved = host
+            .request(serde_json::json!({
+                "operation": "schema_preview",
+                "args": {
+                    "connection_id": profile.id,
+                    "request": {
+                        "table": schema_object,
+                        "operation": { "type": "drop_table" }
+                    }
+                }
+            }))
+            .await
+            .unwrap();
+        assert_eq!(approved["profile_revision"], profile.revision);
+        let changed_profile = host
+            .save_profile(profile.clone(), Some("studio_test".into()), false)
+            .unwrap();
+        assert_ne!(changed_profile.revision, profile.revision);
+        let stale_apply = host
+            .request(serde_json::json!({
+                "operation": "schema_apply",
+                "args": {
+                    "connection_id": profile.id,
+                    "expected_profile_revision": approved["profile_revision"],
+                    "request": {
+                        "table": schema_object,
+                        "operation": { "type": "drop_table" },
+                        "confirmation": {
+                            "confirmed": true,
+                            "typed_name": table
+                        }
+                    }
+                }
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(stale_apply.code, "SCHEMA_PROFILE_CHANGED");
         let execution = host
             .start(session.id, format!("DROP TABLE {table}"))
             .await

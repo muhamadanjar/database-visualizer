@@ -40,6 +40,15 @@
 - [x] Durable admission/idempotency, status lookup tanpa repost; restart tidak replay; Unknown ketika commit/rollback tidak pasti. Bukti 2026-10-11: source dan suite terkait pada laporan validasi; browser/native tetap gate terpisah.
 - [ ] Fresh execute/tenant/tab checks, Viewer metadata-only, DB privilege/constraint/FK/trigger tetap berlaku; efek eksternal tidak dijanjikan atomic.
 - [x] Close/navigation draft prompt, expiry/conflict refresh, logout/revoke cleanup, tanpa autosave/localStorage/history/restore draft rows. Bukti 2026-10-11: source dan suite terkait pada laporan validasi; browser/native tetap gate terpisah.
+- [x] Dari tab Data, buka inline/staged row editing dengan Preview/Apply existing; CRUD tetap eligibility-gated dan tanpa jalur mutation kedua. Bukti 2026-11-09: `pnpm test:native` initial phase pada PostgreSQL/MySQL menjalankan update/delete/insert, Preview/Apply/readback; native schema-refresh regression PostgreSQL setelah add-column juga lulus.
+
+### Milestone C — Schema management desktop
+
+- [x] Implementasikan create/rename/drop table; add/alter/rename/drop column; create/drop index; add/drop primary, unique, foreign-key, dan check constraints pada PostgreSQL/MySQL. Bukti 2026-11-09: generator/guard unit tests `db-core::schema::tests`, workflow integrasi disposable kedua engine, dan native add-column kedua engine. Permission/dependency/error matrix belum terbukti.
+- [x] Form menghasilkan SQL dialect-specific, tidak menulis saat Preview; destructive Apply mensyaratkan ketikan nama object dan konfirmasi eksplisit. Bukti 2026-11-09: native preview/no-write/apply metadata-readback add-column kedua engine; UI test destructive exact-name confirmation. Destructive native E2E belum dijalankan.
+- [ ] Validasi identifiers, literal/default, type conversion, capabilities per engine, privilege, dependency/error, transaction side effects, dan outcome Unknown.
+- [ ] Integration dan native E2E kedua engine: operasi didukung, permission/failure, no-write preview, destructive confirmation, refresh metadata/readback.
+
 
 ### Migration, operations dan acceptance
 
@@ -54,9 +63,9 @@
 
 ## Acceptance criteria
 
-Desktop/web memakai shared contracts/core/UI; baseline query/filter tetap kompatibel. Pencarian tidak membuka private history atau plaintext persistent index. Autocomplete tidak mengubah SQL otomatis. Editing menggunakan PK asli, tipe aman, fresh authorization dan dedicated atomic transaction; conflict/unknown ditampilkan tanpa replay atau janji rollback yang belum terbukti.
+Desktop/web memakai shared contracts/core/UI; baseline query/filter tetap kompatibel. Pencarian tidak membuka private history atau plaintext persistent index. Autocomplete tidak mengubah SQL otomatis. Row editing memakai PK asli, tipe aman, fresh authorization dan dedicated atomic transaction; conflict/unknown ditampilkan tanpa replay atau janji rollback yang belum terbukti. Grid UX memakai editor staged Preview/Apply existing. Schema management desktop hanya mengirim operation allow-listed setelah SQL preview dan konfirmasi; destructive change memerlukan typed object confirmation dan status outcome Unknown tetap jujur.
 
-Semua batas resource memiliki failure-path evidence. Runtime kedua engine, browser/native, migration/restore/benchmark/pipeline dan gate fase sebelumnya harus mempunyai bukti sebelum Phase 4 Selesai. Basic autocomplete/saved queries/EXPLAIN/DDL tetap baseline MVP; Phase 4 meningkatkan pengalaman tersebut.
+Semua batas resource memiliki failure-path evidence. Runtime kedua engine, browser/native, migration/restore/benchmark/pipeline dan gate fase sebelumnya harus mempunyai bukti sebelum Phase 4 Selesai. Schema DDL tidak menjanjikan rollback/online behavior lintas engine; operasi yang tidak didukung harus ditolak eksplisit.
 
 ## Blockers dan review
 

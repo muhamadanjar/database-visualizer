@@ -5,6 +5,12 @@ import type {
   Notification,
 } from '@database-studio/contracts';
 export class TauriDatabaseTransport implements DatabaseTransport {
+  readonly capabilities = {
+    platform: 'desktop' as const,
+    manageConnections: true,
+    execute: true,
+    persistentCredentials: true,
+  };
   private metadataTail = new Map<string, Promise<unknown>>();
   private metadataPending = new Map<string, number>();
   async onCloseRequested(handler: () => Promise<boolean>): Promise<() => void> {

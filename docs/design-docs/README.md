@@ -17,12 +17,15 @@ Design doc diperlukan untuk perubahan arsitektur, komponen/service baru, schema 
 
 ## Indeks
 
-| Dokumen | Dibuat | Status | Fitur / Plan |
-|---|---|---|---|
-| [Foundation](2026-10-09-foundation.md) | 2026-10-09 | Implemented | [Core](../features/database-core-adapters.md), [query/session](../features/query-sessions-streaming.md), [Phase 1](../plans/phase-1-foundation.md) |
-| [Desktop MVP](2026-10-09-desktop-mvp.md) | 2026-10-09 | Approved | [Desktop](../features/desktop-workspace.md), [editor/grid](../features/sql-editor-result-grid.md), [Phase 2](../plans/phase-2-desktop-mvp.md) |
-| [Web MVP](2026-10-10-web-mvp.md) | 2026-10-10 | Approved | [Web/workspace](../features/web-auth-workspaces.md), [Phase 3](../plans/phase-3-web-mvp.md) |
-| [Productivity](2026-10-10-productivity.md) | 2026-10-10 | Approved | [Productivity](../features/productivity-tools.md), [Phase 4](../plans/phase-4-productivity.md) |
+| Dokumen                                                            | Dibuat     | Status      | Fitur / Plan                                                                                                                                       |
+| ------------------------------------------------------------------ | ---------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Foundation](2026-10-09-foundation.md)                             | 2026-10-09 | Implemented | [Core](../features/database-core-adapters.md), [query/session](../features/query-sessions-streaming.md), [Phase 1](../plans/phase-1-foundation.md) |
+| [Desktop MVP](2026-10-09-desktop-mvp.md)                           | 2026-10-09 | Approved    | [Desktop](../features/desktop-workspace.md), [editor/grid](../features/sql-editor-result-grid.md), [Phase 2](../plans/phase-2-desktop-mvp.md)      |
+| [Web MVP](2026-10-10-web-mvp.md)                                   | 2026-10-10 | Approved    | [Web/workspace](../features/web-auth-workspaces.md), [Phase 3](../plans/phase-3-web-mvp.md)                                                        |
+| [Productivity](2026-10-10-productivity.md)                         | 2026-10-10 | Approved    | [Productivity](../features/productivity-tools.md), [Phase 4](../plans/phase-4-productivity.md)                                                     |
+| [Inline Table Editing UX](2026-11-09-grid-editing-ux.md)           | 2026-11-09 | Approved    | [Editor/grid](../features/sql-editor-result-grid.md), [Phase 4](../plans/phase-4-productivity.md)                                                  |
+| [Schema Change Management](2026-11-09-schema-change-management.md) | 2026-11-09 | Approved    | [Database adapters](../features/database-core-adapters.md), [Capability map](../../CAPABILITY-MAP.md)                                              |
+| [Phase 5 — ER Diagram Read-only](2026-10-12-phase-5-er-diagram.md) | 2026-10-12 | Draft       | [Advanced IDE](../features/advanced-ide.md), [Phase 5](../plans/phase-5-advanced-ide.md)                                                           |
 
 Desain Desktop/Web dan patch driver disetujui pengguna. Gate acceptance tetap dicatat pada plan; [validasi Web](../plans/phase-3-web-mvp-validation.md) dan [runbook](../plans/phase-3-web-mvp-operations.md) tersedia.
 

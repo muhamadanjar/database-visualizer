@@ -13,9 +13,11 @@ Menjelajah object database dan memeriksa struktur/data tanpa memuat seluruh kata
 - Explorer berbentuk tree dengan lazy loading per node; capabilities menentukan kelompok object.
 - PostgreSQL MVP: database/schema/table/column, keys/constraints/index, view/materialized view, sequence, function/procedure/trigger, enum/custom type.
 - MySQL MVP: database/table/column, keys/constraints/index, view, function/procedure/trigger.
-- Inspector menyediakan Data, Columns, Indexes, Constraints, Foreign Keys, DDL.
-- Table viewer default 100 rows dengan pagination/lazy fetch, sorting, filtering dasar, dan refresh.
-- Desain Phase 2: sorting/filtering/pagination di database dengan quoted identifiers dan parameter nilai. Tanpa key unik halaman dapat berubah. Metadata terpisah tidak melihat temporary/uncommitted objects tab SQL.
+- Inspector menyediakan Data, Columns, Indexes, Constraints, Foreign Keys, dan DDL sebagai viewer.
+- Structure menyediakan pengelolaan schema desktop berbasis operasi terstruktur: create/rename/drop table; add/alter/rename/drop column; create/drop index; add/drop primary, unique, foreign-key, dan check constraint. SQL dialect-specific ditampilkan sebagai preview; Preview tidak menulis. Apply destructive meminta nama object persis dan konfirmasi.
+- Tab Data menyediakan inline row editing melalui draft, Preview, Apply, dan readback untuk tabel transactional ber-primary key saat transport mengizinkan execute; tabel tanpa PK, view, hasil query arbitrer, dan kolom unsupported tetap read-only. Pada desktop, snapshot dan mutation terikat ke revisi profil koneksi. Setelah Apply, kembali ke Data otomatis membaca ulang halaman tabel.
+- Pengelolaan schema tidak menerima SQL bebas; gunakan SQL Editor untuk DDL manual. Apply memakai koneksi terpisah dan terikat ke revisi profil saat Preview. Alter Column ditolak bila atribut/collation existing tidak dapat dipertahankan oleh form (termasuk atribut MySQL dan explicit collation PostgreSQL). UI tidak menjanjikan rollback/online DDL lintas engine; outcome tidak pasti tidak boleh diulang tanpa inspeksi schema.
+- PostGIS map viewer belum tersedia.
 
 ## Acceptance criteria
 
@@ -25,17 +27,16 @@ Menjelajah object database dan memeriksa struktur/data tanpa memuat seluruh kata
 
 ## Batasan & keputusan lanjutan
 
-Advanced schema diff/migration dan ER diagram berada pada future scope.
+Advanced schema diff/migration, pengelolaan database/schema/privilege, dan ER diagram berada pada future scope. DDL terstruktur hanya menargetkan base table; viewer khusus PostGIS juga belum tersedia.
 
 ## Dokumen terkait
 
 - [Plan utama](../plans/phase-2-desktop-mvp.md); lihat [indeks fase](../plans/README.md) untuk platform/fase lanjutan.
-- [Foundation](../design-docs/2026-10-09-foundation.md) dan [Desktop MVP — Approved](../design-docs/2026-10-09-desktop-mvp.md); metadata lengkap/DDL telah diuji pada adapter kedua engine. PostgreSQL table DDL adalah rekonstruksi inspeksi, bukan backup.
+- [Foundation](../design-docs/2026-10-09-foundation.md), [Desktop MVP — Approved](../design-docs/2026-10-09-desktop-mvp.md), [schema change](../design-docs/2026-11-09-schema-change-management.md), dan [inline editing UX](../design-docs/2026-11-09-grid-editing-ux.md); PostgreSQL table DDL adalah rekonstruksi inspeksi, bukan backup.
 
 ## Bukti Phase 1
 
 Lihat [validasi Foundation](../plans/phase-1-foundation.md) untuk commands, hasil, dan batas bukti. Bukti Foundation berbeda dari validasi desktop dan tidak menutup acceptance seluruh platform.
-
 
 ## Bukti Phase 2 — 2026-10-10
 

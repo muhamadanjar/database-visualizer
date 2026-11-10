@@ -6,6 +6,7 @@ import type {
 } from '@database-studio/contracts';
 export interface EditSnapshot {
   token: string;
+  profile_revision?: number;
   offset: number;
   columns: ColumnMetadata[];
   rows: Row[];
@@ -47,7 +48,9 @@ export const useEditDrafts = create<{
 }));
 export const editingDirty = () =>
   Object.values(useEditDrafts.getState().drafts).some(
-    (d) => d.changes.length > 0 || ['Applying', 'Unknown'].includes(d.state),
+    (d) =>
+      d.changes.length > 0 ||
+      ['Applying', 'Refreshing', 'Unknown'].includes(d.state),
   );
 export async function discardEditDrafts(
   transport: DatabaseTransport,
@@ -55,7 +58,7 @@ export async function discardEditDrafts(
 ): Promise<boolean> {
   for (const [tab, draft] of Object.entries(useEditDrafts.getState().drafts)) {
     if (id && tab !== id) continue;
-    if (draft.state === 'Applying') {
+    if (['Applying', 'Refreshing'].includes(draft.state)) {
       window.alert('Batalkan atau tunggu Apply selesai sebelum menutup tab.');
       return false;
     }
@@ -72,6 +75,9 @@ export async function discardEditDrafts(
       connection_id: draft.connection,
       tab_id: tab,
     });
+    const current = useEditDrafts.getState().drafts[tab];
+    if (current !== draft || ['Applying', 'Refreshing'].includes(current.state))
+      return false;
     useEditDrafts.getState().remove(tab);
   }
   return true;

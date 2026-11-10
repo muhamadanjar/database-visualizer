@@ -15,7 +15,7 @@ Mempercepat pekerjaan SQL desktop/web melalui completion kontekstual, pencarian 
 - Pencarian nama/SQL oleh host/backend dengan dekripsi bertahap, filter/pagination/continuation dan incomplete status. SQL tetap encrypted at rest; tidak ada plaintext search index atau dump koleksi ke browser.
 - Saved queries tetap shared workspace dengan ownership/revisions, favorit pribadi; history tetap pribadi/default OFF.
 - Navigasi/search/copy DDL/EXPLAIN biasa serta shortcuts sesuai fokus/izin; tidak menjalankan ANALYZE otomatis.
-- CRUD grid hanya base table transactional PostgreSQL/InnoDB ber-PK/composite PK; view/no-PK/arbitrary SQL result read-only.
+- Inline editing dari tab Data memakai satu editor staged Preview/Apply; hanya tabel transactional ber-PK dan kolom yang didukung dapat diubah. Non-PK/view/query arbitrer tetap read-only.
 - Typed values/NULL/DEFAULT, generated/unsupported columns read-only; preview/confirm, scoped original snapshot, lock/reread/conflict dan dedicated atomic editing transaction.
 - Draft sementara tanpa restore/autosave mutation; idempotency tanpa replay, Unknown saat commit tidak pasti, cleanup pada expiry/logout/revoke.
 - Execute role existing dan privilege customer DB berlaku; Viewer metadata-only. FK/trigger tetap berlaku tanpa janji external atomicity.
@@ -30,7 +30,7 @@ Instruksi implementasi pengguna dicatat 2026-10-11. Kontrak/schema v2 tersedia; 
 
 ## Dokumen terkait
 
-- [Productivity — Approved](../design-docs/2026-10-10-productivity.md), [checklist Phase 4](../plans/phase-4-productivity.md).
+- [Productivity — Approved](../design-docs/2026-10-10-productivity.md), [inline editing UX](../design-docs/2026-11-09-grid-editing-ux.md), [checklist Phase 4](../plans/phase-4-productivity.md).
 - [Editor/grid](sql-editor-result-grid.md), [Foundation](../design-docs/2026-10-09-foundation.md), [Desktop](../design-docs/2026-10-09-desktop-mvp.md), [Web](../design-docs/2026-10-10-web-mvp.md).
 
 ## Bukti — 2026-10-10

@@ -994,6 +994,7 @@ dependencies = [
  "db-mysql",
  "db-postgres",
  "db-types",
+ "serde",
  "serde_json",
  "sqlparser",
  "sqlx",

@@ -4,9 +4,9 @@ import { spawn } from 'node:child_process';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function procPids() {
-  return readdirSync('/proc', { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
-    .map((entry) => Number(entry.name));
+  return readdirSync('/proc')
+    .filter((pid) => /^\d+$/.test(pid))
+    .map(Number);
 }
 
 function commandLine(pid) {

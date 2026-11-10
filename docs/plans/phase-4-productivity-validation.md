@@ -11,6 +11,13 @@
 - `services/api/tests/web.rs`: private favorites, shared saved-query search, headers tanpa SQL, Viewer denial, cross-user preview/status denial, mutation admission/poll/repeat tanpa eksekusi ulang receipt readback dengan cross-user denial dan reread changed row pada kedua engine; schema/instance guard dan regresi tenant/session/HTTP/WS.
 - Frontend: 16 Vitest test lulus; completion alias/dialect/active statement/strings/comments/200 suggestions, metadata oversize rejection dan transport lost-response lookup tanpa repost. Typecheck, build desktop/web, Prettier dan Rust fmt lulus. Clippy paket core/adapters/runtime/API all-targets dengan `-D warnings` lulus; empat warning upstream vendor SQLx dipisahkan. Build masih memberi warning ukuran chunk Monaco.
 
+### Tambahan verifikasi — 2026-11-09
+
+- Rust: `cargo test -p db-core -p db-types -p desktop-runtime -p query-runtime -p studio-api --features studio-api/test-provider --locked -- --include-ignored`: 81 test lulus; 22 suite, termasuk stale profile revision untuk row edit/DDL, penolakan ALTER MySQL yang tak bisa mempertahankan atribut/collation, dan explicit collation PostgreSQL.
+- Frontend: 36 Vitest tests lulus; `pnpm typecheck`, `pnpm typecheck:web`, `pnpm build`, `pnpm build:web`, `pnpm format:check`, dan `cargo fmt --all --check` lulus. Workspace Clippy (`--all-targets --features studio-api/test-provider --locked -- -D warnings`) selesai; empat warning berasal dari SQLx PostgreSQL vendored.
+- Native Linux: run terakhir `pnpm test:native` lulus pada Arch/WebKitGTK 605.1.15: skenario PostgreSQL dan MySQL serta dua restart tests. E2E memverifikasi update/delete/insert inline beserta refresh row, add-column DDL/refresh Inspector, ACK timeout/no-ACK cancellation, dan consumer-close recovery. Harness memakai build debug dengan automation feature, bukan paket release.
+- Batas build: chunk Monaco ~2.98 MB; empat warning SQLx PostgreSQL berasal dari vendored dependency. macOS dan `.deb` tidak diuji/dibangun dari Arch.
+
 ## Benchmark lokal
 
 `node scripts/productivity-benchmark.mjs`: Node v24.18.0, 20.000 metadata names, 100 sampel, p95 **18,41 ms**, maksimum **28,10 ms**. [Artefak pengukuran](phase-4-productivity-benchmark.json). Ini fungsi completion hangat saja, tidak termasuk Monaco render, network atau cold metadata. Target 200 ms terpenuhi pada fixture lokal; belum SLA browser/native. Jalankan ulang untuk kondisi mesin berbeda.

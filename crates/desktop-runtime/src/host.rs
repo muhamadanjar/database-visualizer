@@ -26,6 +26,7 @@ struct Execution {
     active_query: Option<Uuid>,
 }
 pub struct DesktopHost {
+    profile_revision_gate: Mutex<()>,
     edit_sessions: Mutex<HashMap<Uuid, (Uuid, CancellationToken)>>,
     edits: query_runtime::edit::EditRuntime,
     pub persistence: Persistence,
@@ -85,6 +86,7 @@ impl DesktopHost {
             ],
         )?;
         let host = Arc::new(Self {
+            profile_revision_gate: Mutex::new(()),
             edit_sessions: Mutex::new(HashMap::new()),
             edits: query_runtime::edit::EditRuntime::default(),
             persistence,
@@ -111,6 +113,25 @@ impl DesktopHost {
         }
         Ok(host)
     }
+
+    fn ensure_profile_revision(
+        &self,
+        connection: Uuid,
+        expected_revision: u32,
+        session_revision: u32,
+    ) -> DbResult<()> {
+        let _gate = lock(&self.profile_revision_gate)?;
+        if session_revision == expected_revision
+            && self.persistence.profile(connection)?.revision == expected_revision
+        {
+            Ok(())
+        } else {
+            Err(error(
+                "SCHEMA_PROFILE_CHANGED",
+                "Preview the operation again after the connection profile changes",
+            ))
+        }
+    }
     pub fn save_profile(
         &self,
         profile: Profile,
@@ -119,6 +140,7 @@ impl DesktopHost {
     ) -> DbResult<Profile> {
         let id = profile.id;
         let password = password.map(Zeroizing::new);
+        let _gate = lock(&self.profile_revision_gate)?;
         let profile = self.persistence.save_profile(
             profile,
             password.as_ref().map(|p| p.as_str()),
@@ -142,6 +164,52 @@ impl DesktopHost {
             },
         };
         profile.config(password)
+    }
+    async fn validate_schema_change(
+        &self,
+        profile: &Profile,
+        request: &SchemaChangeRequest,
+    ) -> DbResult<()> {
+        let SchemaOperation::AlterColumn { column } = &request.operation else {
+            return Ok(());
+        };
+        let metadata = self
+            .core
+            .metadata(
+                &self.config(profile, None)?,
+                &MetadataRequest::Inspect {
+                    object: request.table.clone(),
+                },
+            )
+            .await?;
+        let existing = metadata
+            .columns
+            .iter()
+            .find(|existing| existing.name == column.name)
+            .ok_or_else(|| error("SCHEMA_COLUMN_NOT_FOUND", "Column no longer exists"))?;
+        let unsupported = match profile.engine {
+            Engine::MySql => {
+                existing
+                    .extra
+                    .as_deref()
+                    .is_some_and(|extra| !extra.trim().is_empty())
+                    || existing
+                        .comment
+                        .as_deref()
+                        .is_some_and(|comment| !comment.is_empty())
+                    || existing.collation.as_deref().is_some_and(|collation| {
+                        metadata.table_collation.as_deref() != Some(collation)
+                    })
+            }
+            Engine::Postgres => existing.collation.is_some(),
+        };
+        if unsupported {
+            return Err(error(
+                "UNSUPPORTED_SCHEMA_CHANGE",
+                "This column has attributes that this form cannot preserve; use SQL Editor",
+            ));
+        }
+        Ok(())
     }
     pub async fn test(&self, profile: Profile, password: Option<String>) -> DbResult<()> {
         self.core
@@ -214,6 +282,7 @@ impl DesktopHost {
             self.disconnect(id, force).await?;
         }
         lock(&self.executions)?.retain(|_, e| e.info.connection_id != id);
+        let _gate = lock(&self.profile_revision_gate)?;
         self.persistence.delete_profile(id)?;
         lock(&self.memory_passwords)?.remove(&id);
         Ok(())
@@ -346,13 +415,17 @@ impl DesktopHost {
         Ok(e.info.clone())
     }
     pub async fn start(self: &Arc<Self>, session: Uuid, sql: String) -> DbResult<Uuid> {
-        self.start_bound(session, sql, Vec::new()).await
+        self.start_bound(session, sql, Vec::new(), true)
     }
-    async fn start_bound(
+    fn start_without_history(self: &Arc<Self>, session: Uuid, sql: String) -> DbResult<Uuid> {
+        self.start_bound(session, sql, Vec::new(), false)
+    }
+    fn start_bound(
         self: &Arc<Self>,
         session: Uuid,
         sql: String,
         parameters: Vec<String>,
+        record_history: bool,
     ) -> DbResult<Uuid> {
         let (profile, auto_commit) = {
             let sessions = lock(&self.sessions)?;
@@ -429,7 +502,7 @@ impl DesktopHost {
                     info.error = Some(e);
                 }
             }
-            if profile.history_enabled {
+            if profile.history_enabled && record_history {
                 let document = Document {
                     id,
                     connection_id: profile.id,
@@ -519,6 +592,17 @@ impl DesktopHost {
                 "Execution persistence/cleanup is still pending; retry close",
             )
         })?
+    }
+    async fn wait_execution_for_cleanup(&self, id: Uuid) -> DbResult<()> {
+        loop {
+            if lock(&self.executions)?
+                .get(&id)
+                .is_none_or(|execution| execution.info.status.terminal())
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
     pub async fn request(
         self: &Arc<Self>,
@@ -620,26 +704,77 @@ impl DesktopHost {
             "schema_preview" => {
                 let connection = id("connection_id")?;
                 let request: db_types::SchemaChangeRequest = serde_json::from_value(
-                    args.get("request").cloned().ok_or_else(|| error("INVALID_SCHEMA_CHANGE", "Schema change required"))?,
-                ).map_err(json_error)?;
+                    args.get("request")
+                        .cloned()
+                        .ok_or_else(|| error("INVALID_SCHEMA_CHANGE", "Schema change required"))?,
+                )
+                .map_err(json_error)?;
                 let profile = self.persistence.profile(connection)?;
-                serde_json::to_value(db_core::schema_preview_for_database(profile.engine, &profile.database, &request)?).map_err(json_error)
+                self.validate_schema_change(&profile, &request).await?;
+                let preview = db_core::schema_preview_for_database(
+                    profile.engine,
+                    &profile.database,
+                    &request,
+                )?;
+                let mut response = serde_json::to_value(preview).map_err(json_error)?;
+                response["profile_revision"] = serde_json::json!(profile.revision);
+                Ok(response)
             }
             "schema_apply" => {
                 let connection_id = id("connection_id")?;
+                let expected_profile_revision = args
+                    .get("expected_profile_revision")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|revision| u32::try_from(revision).ok())
+                    .ok_or_else(|| {
+                        error(
+                            "SCHEMA_PROFILE_CHANGED",
+                            "Preview the schema change again after the connection profile changes",
+                        )
+                    })?;
                 let request: db_types::SchemaChangeRequest = serde_json::from_value(
-                    args.get("request").cloned().ok_or_else(|| error("INVALID_SCHEMA_CHANGE", "Schema change required"))?,
-                ).map_err(json_error)?;
+                    args.get("request")
+                        .cloned()
+                        .ok_or_else(|| error("INVALID_SCHEMA_CHANGE", "Schema change required"))?,
+                )
+                .map_err(json_error)?;
                 let profile = self.persistence.profile(connection_id)?;
-                // The connection id selects credentials/profile context only.
+                if profile.revision != expected_profile_revision {
+                    return Err(error(
+                        "SCHEMA_PROFILE_CHANGED",
+                        "Preview the schema change again after the connection profile changes",
+                    ));
+                }
+                self.validate_schema_change(&profile, &request).await?;
+                let preview = db_core::schema_preview_for_database(
+                    profile.engine,
+                    &profile.database,
+                    &request,
+                )?;
+                db_core::require_confirmation(&preview, request.confirmation.as_ref())?;
                 // DDL never borrows a SQL-tab session: this host owns a fresh,
                 // auto-commit session and closes it after terminal execution.
-                let preview = db_core::schema_preview_for_database(profile.engine, &profile.database, &request)?;
-                db_core::require_confirmation(&preview, request.confirmation.as_ref())?;
                 let session = self.connect(connection_id, None).await?;
-                let result = async {
-                    self.start(session.id, preview.sql).await
-                }.await;
+                if session.revision != expected_profile_revision {
+                    self.disconnect(session.id, true).await?;
+                    return Err(error(
+                        "SCHEMA_PROFILE_CHANGED",
+                        "Preview the schema change again after the connection profile changes",
+                    ));
+                }
+                let result = (|| {
+                    let _gate = lock(&self.profile_revision_gate)?;
+                    if self.persistence.profile(connection_id)?.revision
+                        != expected_profile_revision
+                        || session.revision != expected_profile_revision
+                    {
+                        return Err(error(
+                            "SCHEMA_PROFILE_CHANGED",
+                            "Preview the schema change again after the connection profile changes",
+                        ));
+                    }
+                    self.start_without_history(session.id, preview.sql)
+                })();
                 let execution_id = match result {
                     Ok(id) => id,
                     Err(error) => {
@@ -649,10 +784,8 @@ impl DesktopHost {
                 };
                 let host = self.clone();
                 tokio::spawn(async move {
-                    // Disconnect only after the normal terminal cleanup has
-                    // completed. A cleanup timeout leaves the outcome/session
-                    // unresolved rather than pretending the DDL was rolled back.
-                    if host.wait_execution(execution_id).await.is_ok() {
+                    // DDL can hold a database lock beyond the interactive wait limit.
+                    if host.wait_execution_for_cleanup(execution_id).await.is_ok() {
                         let _ = host.disconnect(session.id, true).await;
                     }
                 });
@@ -668,7 +801,7 @@ impl DesktopHost {
                     serde_json::from_value(args.clone()).map_err(json_error)?;
                 let (sql, parameters) = query_runtime::table_query(&profile, &request)?;
                 Ok(
-                    serde_json::json!({"execution_id":self.start_bound(session,sql,parameters).await?}),
+                    serde_json::json!({"execution_id":self.start_bound(session,sql,parameters,true)?}),
                 )
             }
             "execution" => {
@@ -742,6 +875,12 @@ impl DesktopHost {
                 .map_err(json_error)?;
                 let profile = self.persistence.profile(connection)?;
                 let session = self.connect(connection, None).await?;
+                if let Err(e) =
+                    self.ensure_profile_revision(connection, profile.revision, session.revision)
+                {
+                    let _ = self.disconnect(session.id, true).await;
+                    return Err(e);
+                }
                 let result = async {
                     let metadata = self
                         .core
@@ -773,7 +912,9 @@ impl DesktopHost {
                 }
                 .await;
                 let _ = self.disconnect(session.id, true).await;
-                serde_json::to_value(result?).map_err(json_error)
+                let mut response = serde_json::to_value(result?).map_err(json_error)?;
+                response["profile_revision"] = serde_json::json!(profile.revision);
+                Ok(response)
             }
             "edit_readback" => {
                 let owner = query_runtime::edit::EditOwner {
@@ -789,6 +930,17 @@ impl DesktopHost {
                 .map_err(json_error)
             }
             "edit_preview" => {
+                let connection = id("connection_id")?;
+                let expected_profile_revision = args
+                    .get("expected_profile_revision")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|revision| u32::try_from(revision).ok())
+                    .ok_or_else(|| error("SCHEMA_PROFILE_CHANGED", "Preview the edit again"))?;
+                self.ensure_profile_revision(
+                    connection,
+                    expected_profile_revision,
+                    expected_profile_revision,
+                )?;
                 let owner = query_runtime::edit::EditOwner {
                     user: "desktop".into(),
                     tab: id("tab_id")?.to_string(),
@@ -800,7 +952,7 @@ impl DesktopHost {
                         .ok_or_else(|| error("INVALID_EDIT", "Batch required"))?,
                 )
                 .map_err(json_error)?;
-                self.edits.preview(&owner, id("connection_id")?, &batch)
+                self.edits.preview(&owner, connection, &batch)
             }
             "edit_discard" => {
                 self.edits.discard_owner(&query_runtime::edit::EditOwner {
@@ -814,6 +966,11 @@ impl DesktopHost {
                 let connection = id("connection_id")?;
                 let tab = id("tab_id")?;
                 let operation_id = id("idempotency_key")?;
+                let expected_profile_revision = args
+                    .get("expected_profile_revision")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|revision| u32::try_from(revision).ok())
+                    .ok_or_else(|| error("SCHEMA_PROFILE_CHANGED", "Preview the edit again"))?;
                 let batch: query_runtime::edit::EditBatch = serde_json::from_value(
                     args.get("batch")
                         .cloned()
@@ -839,11 +996,16 @@ impl DesktopHost {
                     return Ok(serde_json::json!({"id":operation_id,"state":outcome}));
                 }
                 let prepared = (|| {
+                    let _gate = lock(&self.profile_revision_gate)?;
+                    let profile = self.persistence.profile(connection)?;
+                    if profile.revision != expected_profile_revision {
+                        return Err(error(
+                            "SCHEMA_PROFILE_CHANGED",
+                            "Preview the edit again after the connection profile changes",
+                        ));
+                    }
                     self.edits.preview(&owner, connection, &batch)?;
-                    Ok::<_, DbError>((
-                        self.persistence.profile(connection)?,
-                        self.edits.object(&owner, connection, batch.token)?,
-                    ))
+                    Ok::<_, DbError>((profile, self.edits.object(&owner, connection, batch.token)?))
                 })();
                 let (profile, object) = match prepared {
                     Ok(v) => v,
@@ -869,6 +1031,13 @@ impl DesktopHost {
                                 .map_err(|_| {
                                     error("EDIT_DEADLINE", "Edit admission deadline exceeded")
                                 })??;
+                        if host
+                            .ensure_profile_revision(connection, profile.revision, session.revision)
+                            .is_err()
+                        {
+                            let _ = host.disconnect(session.id, true).await;
+                            return Ok(query_runtime::edit::EditOutcome::Failed);
+                        }
                         if let Some(entry) = lock(&host.edit_sessions)?.get_mut(&operation_id) {
                             entry.0 = session.id;
                         }

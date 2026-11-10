@@ -36,6 +36,37 @@ const header: DocumentHeader = {
   created_at_ms: 1,
 };
 beforeEach(() => useWorkspace.setState({ tabs: [], activeId: null }));
+it('keeps the edit action for an existing connection', async () => {
+  const request = vi.fn(async (operation: string) => {
+    if (operation === 'handshake') return { version: 1 };
+    if (operation === 'profiles') return [profile];
+    if (operation === 'layout') return {};
+    if (operation === 'recent_files') return [];
+    return null;
+  });
+  const transport = {
+    capabilities: {
+      platform: 'desktop' as const,
+      manageConnections: true,
+      execute: true,
+      persistentCredentials: true,
+    },
+    request,
+    watch: async () => () => {},
+  } as unknown as DatabaseTransport;
+  render(<Workspace transport={transport} />);
+  fireEvent.click(
+    await screen.findByRole(
+      'button',
+      { name: /Unit fixture/ },
+      { timeout: 5000 },
+    ),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  expect(
+    await screen.findByRole('heading', { name: 'Edit koneksi' }),
+  ).toBeInTheDocument();
+});
 
 it('runs a DML statement through the visible SQL editor Run action', async () => {
   const request = vi.fn(async (operation: string) => {
@@ -397,6 +428,11 @@ it('enters table edit mode from Data and returns through the draft guard', async
     name: 'customers',
     kind: 'Table' as const,
   };
+  const otherProfile = {
+    ...profile,
+    id: '00000000-0000-4000-8000-000000000003',
+    name: 'Second fixture',
+  };
   const execution = {
     id: 'execution-1',
     session_id: 'session-1',
@@ -418,56 +454,93 @@ it('enters table edit mode from Data and returns through the draft guard', async
         object,
         inspector: true,
         execution,
+        session: {
+          id: 'session-1',
+          connection_id: profile.id,
+          revision: 1,
+          auto_commit: true,
+          transaction: 'Idle',
+          valid: true,
+          busy: false,
+        },
       },
     ],
     activeId: 'table-tab',
   });
-  const request = vi.fn(async (operation: string) => {
-    if (operation === 'profiles') return [profile];
-    if (operation === 'metadata')
-      return {
-        objects: [object],
-        columns: [
-          {
-            name: 'id',
-            data_type: 'integer',
-            nullable: false,
-            default: null,
-            ordinal: 0,
+  let failMetadata = false;
+  const request = vi.fn(
+    async (operation: string, args?: Record<string, unknown>) => {
+      if (operation === 'profiles') return [profile, otherProfile];
+      if (operation === 'metadata') {
+        if (failMetadata) throw new Error('metadata refresh failed');
+        if (args?.request === 'Schemas')
+          return { objects: [{ name: 'public' }] };
+        if (
+          args?.request &&
+          typeof args.request === 'object' &&
+          'Objects' in args.request
+        )
+          return { objects: [object] };
+        return {
+          objects: [object],
+          columns: [
+            {
+              name: 'id',
+              data_type: 'integer',
+              nullable: false,
+              default: null,
+              ordinal: 0,
+            },
+          ],
+          indexes: [],
+          constraints: [],
+          ddl: null,
+          editing: {
+            primary_key: ['id'],
+            generated: [],
+            transactional: true,
+            warnings: [],
           },
-        ],
-        indexes: [],
-        constraints: [],
-        ddl: null,
-        editing: {
+        };
+      }
+      if (operation === 'schema_preview')
+        return {
+          sql: 'DROP TABLE "customers";',
+          destructive: true,
+          affected_name: 'customers',
+          profile_revision: 1,
+        };
+      if (operation === 'schema_apply') return { execution_id: 'unknown-ddl' };
+      if (operation === 'execution') throw new Error('stream lost');
+      if (operation === 'layout' || operation === 'recent_files') return [];
+      if (operation === 'edit_snapshot')
+        return {
+          token: 'snapshot-token',
+          offset: 0,
+          columns: [
+            {
+              name: 'id',
+              data_type: 'integer',
+              nullable: false,
+              default: null,
+              ordinal: 0,
+            },
+          ],
+          rows: [],
           primary_key: ['id'],
           generated: [],
-          transactional: true,
           warnings: [],
-        },
-      };
-    if (operation === 'layout' || operation === 'recent_files') return [];
-    if (operation === 'edit_snapshot')
-      return {
-        token: 'snapshot-token',
-        offset: 0,
-        columns: [
-          {
-            name: 'id',
-            data_type: 'integer',
-            nullable: false,
-            default: null,
-            ordinal: 0,
-          },
-        ],
-        rows: [],
-        primary_key: ['id'],
-        generated: [],
-        warnings: [],
-      };
-    return null;
-  });
+        };
+      return null;
+    },
+  );
   const transport = {
+    capabilities: {
+      platform: 'desktop' as const,
+      manageConnections: true,
+      execute: true,
+      persistentCredentials: true,
+    },
     request,
     watch: async () => () => {},
   } as unknown as DatabaseTransport;
@@ -475,12 +548,57 @@ it('enters table edit mode from Data and returns through the draft guard', async
 
   fireEvent.click(await screen.findByRole('button', { name: 'Data' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Edit table' }));
-  expect(await screen.findByRole('button', { name: 'Tambah baris' })).toBeInTheDocument();
+  expect(
+    await screen.findByRole('button', { name: 'Tambah baris' }),
+  ).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Kembali ke Data' }));
-  expect(await screen.findByRole('button', { name: 'Edit table' })).toBeInTheDocument();
+  expect(
+    await screen.findByRole('button', { name: 'Edit table' }),
+  ).toBeInTheDocument();
   expect(request).toHaveBeenCalledWith(
     'edit_discard',
     expect.objectContaining({ tab_id: 'table-tab' }),
   );
+  fireEvent.click(await screen.findByRole('button', { name: /Unit fixture/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'public' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Tables' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: /Second fixture/ }),
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Structure' }));
+  fireEvent.change(screen.getByLabelText('Operasi'), {
+    target: { value: 'drop_table' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview SQL' }));
+  await screen.findByLabelText('SQL preview');
+  fireEvent.change(screen.getByLabelText('Ketik tepat: customers'), {
+    target: { value: 'customers' },
+  });
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() =>
+    expect(screen.getByRole('status')).toHaveTextContent('Outcome Unknown'),
+  );
+  failMetadata = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() =>
+    expect(screen.getByText('metadata refresh failed')).toBeInTheDocument(),
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Outcome Unknown');
+  failMetadata = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() =>
+    expect(
+      screen.queryByText('metadata refresh failed'),
+    ).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Outcome Unknown');
+
+  expect(screen.getByRole('button', { name: 'SQL tab' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Saved queries' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'History' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Data' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /Second fixture/ })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
 });

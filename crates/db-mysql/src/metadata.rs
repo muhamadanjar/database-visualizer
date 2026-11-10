@@ -157,8 +157,9 @@ pub async fn read(
             ) {
                 return Ok(response);
             }
-            let columns=sqlx::query("SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,CAST(ORDINAL_POSITION AS SIGNED) AS ordinal FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
+            let columns=sqlx::query("SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,COLUMN_COMMENT,CHARACTER_SET_NAME,COLLATION_NAME,CAST(ORDINAL_POSITION AS SIGNED) AS ordinal FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
             for row in columns {
+                let comment: String = row.try_get_unchecked("COLUMN_COMMENT").map_err(map_error)?;
                 response.columns.push(ColumnMetadata {
                     name: row.try_get_unchecked("COLUMN_NAME").map_err(map_error)?,
                     data_type: row.try_get_unchecked("COLUMN_TYPE").map_err(map_error)?,
@@ -168,9 +169,23 @@ pub async fn read(
                         == "YES",
                     default: row.try_get_unchecked("COLUMN_DEFAULT").map_err(map_error)?,
                     ordinal: row.try_get("ordinal").map_err(map_error)?,
+                    extra: row.try_get_unchecked("EXTRA").map_err(map_error)?,
+                    comment: (!comment.is_empty()).then_some(comment),
+                    character_set: row
+                        .try_get_unchecked("CHARACTER_SET_NAME")
+                        .map_err(map_error)?,
+                    collation: row.try_get_unchecked("COLLATION_NAME").map_err(map_error)?,
                 });
             }
             if object.kind == ObjectKind::Table {
+                response.table_collation = sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?",
+                )
+                .bind(&object.database)
+                .bind(&object.name)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(map_error)?;
                 let keys=sqlx::query_scalar::<_,String>("SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
                 let generated=sqlx::query_scalar::<_,String>("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%GENERATED%') ORDER BY ORDINAL_POSITION").bind(&object.database).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
                 let storage=sqlx::query_scalar::<_,String>("SELECT COALESCE(ENGINE,'') FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?").bind(&object.database).bind(&object.name).fetch_one(&mut *connection).await.map_err(map_error)?;

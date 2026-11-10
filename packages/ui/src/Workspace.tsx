@@ -20,6 +20,7 @@ import type {
   Metadata,
   ObjectId,
   Profile,
+  SchemaOperation,
   Session,
 } from '@database-studio/contracts';
 import { describeError, terminal } from '@database-studio/contracts';
@@ -30,9 +31,10 @@ import { Icon } from './Icon';
 import { ResultGrid } from './ResultGrid';
 import { resultCache } from './cache';
 import { TableEditor } from './TableEditor';
+import { SchemaManager } from './SchemaManager';
 import { enforceMetadataBudget } from './metadataBudget';
 import { DefinitionText } from './DefinitionText';
-import { discardEditDrafts, editingDirty } from './editDrafts';
+import { discardEditDrafts, editingDirty, useEditDrafts } from './editDrafts';
 import type { EditorHandle } from './SqlEditor';
 const SqlEditor = lazy(() => import('./SqlEditor'));
 export const inspectKey = (profile: Profile, object: ObjectId) =>
@@ -79,6 +81,21 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
   const active = tabs.find((t) => t.id === activeId);
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Profile | 'new' | null>(null);
+  const [schemaCreateContext, setSchemaCreateContext] = useState<{
+    connectionId: string;
+    revision: number;
+    engine: Profile['engine'];
+    database: string;
+    schema: string | null;
+  } | null>(null);
+  const [schemaCreateBusy, setSchemaCreateBusy] = useState(false);
+  const [schemaBusyTabId, setSchemaBusyTabId] = useState<string | null>(null);
+  const schemaBusyTabIdRef = useRef<string | null>(null);
+  const updateSchemaBusy = (busy: boolean, tabId: string) => {
+    const next = busy ? tabId : null;
+    schemaBusyTabIdRef.current = next;
+    setSchemaBusyTabId(next);
+  };
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [completions, setCompletions] = useState<string[]>([]);
@@ -236,7 +253,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     return () => clearTimeout(timer);
   }, [tabs, profiles.data, transport]);
   useEffect(() => {
-    if (!canExecute) return;
+    if (!canExecute || schemaBusyTabIdRef.current !== null) return;
     for (const p of profiles.data ?? []) {
       if (!p.restore_sql || restored.current.has(p.id)) continue;
       restored.current.add(p.id);
@@ -252,13 +269,22 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
               kind: header.kind,
               id: header.id,
             });
-            if (!useWorkspace.getState().tabs.some((t) => t.id === doc.id))
+            if (schemaBusyTabIdRef.current !== null) {
+              restored.current.delete(p.id);
+              return;
+            }
+            if (!useWorkspace.getState().tabs.some((t) => t.id === doc.id)) {
               add({
                 id: doc.id,
                 connectionId: p.id,
                 title: doc.name,
                 sql: doc.content.sql,
               });
+            }
+          }
+          if (schemaBusyTabIdRef.current !== null) {
+            restored.current.delete(p.id);
+            return;
           }
           if (docs.length) {
             setConnectionId(p.id);
@@ -269,9 +295,9 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
         })
         .catch(showError);
     }
-  }, [profiles.data, transport, add]);
+  }, [profiles.data, transport, add, schemaBusyTabId]);
   const newTab = (id = connectionId) => {
-    if (!canExecute) return;
+    if (!canExecute || schemaBusyTabIdRef.current !== null) return;
     if (!id) {
       setDialog('new');
       return;
@@ -398,7 +424,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     id?: string,
   ) => {
     if (!canExecute) return;
-    if (!active || active.inspector) {
+    if (schemaBusyTabIdRef.current !== null || !active || active.inspector) {
       setNotice('Buka tab SQL untuk memilih file.');
       return;
     }
@@ -407,6 +433,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
         name: string;
         sql: string;
       } | null>(operation, { id, sql: active.sql });
+      if (schemaBusyTabIdRef.current !== null) return;
       if (file && operation !== 'save_file')
         add({
           id: crypto.randomUUID(),
@@ -482,12 +509,18 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     return () => window.removeEventListener('keydown', listener);
   }, []);
   const connect = async () => {
-    if (!selected) return;
-    setError('');
+    if (!selected || schemaBusyTabIdRef.current !== null) return;
     try {
       const session = await transport.request<Session>('connect', {
         connection_id: selected.id,
       });
+      if (schemaBusyTabIdRef.current !== null) {
+        await transport.request('disconnect', {
+          session_id: session.id,
+          force: true,
+        });
+        return;
+      }
       add({
         id: crypto.randomUUID(),
         connectionId: selected.id,
@@ -571,7 +604,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     }
   };
   const reconnect = async () => {
-    if (!active) return;
+    if (!active || schemaBusyTabIdRef.current !== null) return;
     try {
       if (active.session) {
         if (
@@ -588,6 +621,13 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
       const session = await transport.request<Session>('connect', {
         connection_id: active.connectionId,
       });
+      if (schemaBusyTabIdRef.current !== null) {
+        await transport.request('disconnect', {
+          session_id: session.id,
+          force: true,
+        });
+        return;
+      }
       patch(active.id, { session });
       setNotice('Session baru terhubung.');
     } catch (e) {
@@ -636,21 +676,21 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
     }
   };
   const loadDocuments = async (kind: 'history' | 'saved', offset = 0) => {
-    if (!profile && !selected) return;
+    if ((!profile && !selected) || schemaBusyTabIdRef.current !== null) return;
     const id = documentConnection || profile?.id || selected?.id;
     setDocumentConnection(id ?? '');
     setDocumentKind(kind);
     try {
       setSearchCursor(null);
       setSearchComplete(true);
-      setDocuments(
-        await transport.request<DocumentHeader[]>('documents', {
-          connection_id: id,
-          kind,
-          offset,
-          limit: 100,
-        }),
-      );
+      const loaded = await transport.request<DocumentHeader[]>('documents', {
+        connection_id: id,
+        kind,
+        offset,
+        limit: 100,
+      });
+      if (schemaBusyTabIdRef.current !== null) return;
+      setDocuments(loaded);
       setDocumentOffset(offset);
     } catch (e) {
       showError(e);
@@ -689,9 +729,25 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
       if (canExecute) editor.current?.format();
     },
   };
+  const openSchemaManager = (schema: string | null) => {
+    if (
+      schemaBusyTabIdRef.current !== null ||
+      !selected ||
+      !canExecute ||
+      isWeb
+    )
+      return;
+    setSchemaCreateContext({
+      revision: selected.revision,
+      connectionId: selected.id,
+      engine: selected.engine,
+      database: selected.database,
+      schema,
+    });
+  };
   const openObject = (object: ObjectId) => {
     const id = connectionId;
-    if (!id) return;
+    if (!id || schemaBusyTabIdRef.current !== null) return;
     const existing = tabs.find(
       (t) =>
         t.object?.name === object.name &&
@@ -712,6 +768,40 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
       inspector: true,
     });
     setDocuments(null);
+  };
+  const handleSchemaApplied = async (
+    tab: Tab,
+    operation: SchemaOperation,
+    target?: ObjectId,
+  ) => {
+    if (operation.type === 'rename_table' && target)
+      patch(tab.id, {
+        title: operation.new_name,
+        object: { ...target, name: operation.new_name },
+      });
+    if (operation.type === 'drop_table') await closeTab(tab);
+    else if (tab.session) {
+      const session = await transport.request<Session>('session', {
+        session_id: tab.session.id,
+      });
+      if (session.transaction !== 'Idle' || session.busy)
+        throw new Error('Selesaikan transaksi sebelum menyegarkan schema.');
+      watchers.current.get(tab.id)?.();
+      watchers.current.delete(tab.id);
+      await transport.request('disconnect', {
+        session_id: session.id,
+        force: false,
+      });
+      if (tab.execution)
+        await transport.request('close_execution', {
+          execution_id: tab.execution.id,
+        });
+      resultCache.clear(tab.id);
+      patch(tab.id, { session: undefined, execution: undefined });
+    }
+    await query.invalidateQueries({
+      predicate: (candidate) => metadataQuery(candidate.queryKey),
+    });
   };
   const resize = (axis: 'sidebar' | 'editor', event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -766,11 +856,14 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
         </div>
         <strong className="brand">Database Studio</strong>
         <span className="toolbar-divider" />
-        <button disabled={!canManage} onClick={() => setDialog('new')}>
+        <button
+          disabled={!canManage || schemaBusyTabId !== null}
+          onClick={() => setDialog('new')}
+        >
           <Icon name="plus" /> Koneksi
         </button>
         <button
-          disabled={!connectionId || !canExecute}
+          disabled={schemaBusyTabId !== null || !connectionId || !canExecute}
           onClick={() => newTab()}
         >
           <Icon name="plus" /> SQL tab
@@ -812,13 +905,17 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
           </select>
         ) : null}
         <button
-          disabled={(!profile && !selected) || !canExecute}
+          disabled={
+            schemaBusyTabId !== null || (!profile && !selected) || !canExecute
+          }
           onClick={() => void loadDocuments('saved')}
         >
           Saved queries
         </button>
         <button
-          disabled={(!profile && !selected) || !canExecute}
+          disabled={
+            schemaBusyTabId !== null || (!profile && !selected) || !canExecute
+          }
           onClick={() => void loadDocuments('history')}
         >
           History
@@ -870,6 +967,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                 <button
                   key={p.id}
                   className={`connection-line${connectionId === p.id ? ' active-connection' : ''}`}
+                  disabled={schemaBusyTabId !== null}
                   onClick={() => setConnectionId(p.id)}
                 >
                   <span
@@ -901,7 +999,9 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
             <>
               <div className="connection-actions">
                 <button
-                  disabled={connected || !canExecute}
+                  disabled={
+                    connected || !canExecute || schemaBusyTabId !== null
+                  }
                   onClick={() => void connect()}
                 >
                   {!canExecute
@@ -911,15 +1011,13 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                       : 'Connect'}
                 </button>
                 <button
-                  aria-label="Edit koneksi"
-                  disabled={!canManage}
+                  disabled={!canManage || Boolean(schemaBusyTabId)}
                   onClick={() => setDialog(selected)}
                 >
                   Edit
                 </button>
                 <button
-                  aria-label="Hapus koneksi"
-                  disabled={!canManage}
+                  disabled={!canManage || Boolean(schemaBusyTabId)}
                   onClick={() => {
                     if (
                       window.confirm(
@@ -957,11 +1055,13 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
               {connected ? (
                 <Explorer
                   transport={transport}
+                  disabled={schemaBusyTabId !== null}
                   profile={selected}
                   onOpen={openObject}
                   onNames={(names) =>
                     addNames(selected.id, selected.revision, names)
                   }
+                  onManageSchema={openSchemaManager}
                 />
               ) : (
                 <p className="tree-note">
@@ -991,6 +1091,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                 className={`workspace-tab${activeId === tab.id ? ' active-tab' : ''}`}
               >
                 <button
+                  disabled={schemaBusyTabId !== null}
                   onClick={() => {
                     activate(tab.id);
                     setConnectionId(tab.connectionId);
@@ -1004,6 +1105,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                   {tab.title}
                 </button>
                 <button
+                  disabled={schemaBusyTabId === tab.id}
                   aria-label={`Tutup ${tab.title}`}
                   onClick={() => void closeTab(tab)}
                 >
@@ -1013,6 +1115,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
             ))}
             {tabs.length ? (
               <button
+                disabled={schemaBusyTabId !== null}
                 className="new-tab"
                 aria-label="Tab SQL baru"
                 onClick={() => newTab()}
@@ -1156,6 +1259,7 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
                             id: document.id,
                           })
                           .then((full) => {
+                            if (schemaBusyTabIdRef.current !== null) return;
                             add({
                               id: crypto.randomUUID(),
                               connectionId: full.connection_id,
@@ -1283,6 +1387,8 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
               onNames={(names) =>
                 addNames(profile!.id, profile!.revision, names)
               }
+              onSchemaApplied={handleSchemaApplied}
+              onSchemaBusyChange={(busy) => updateSchemaBusy(busy, active.id)}
             />
           ) : active ? (
             <>
@@ -1582,7 +1688,10 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
             ? ' · Revisi lama; reconnect untuk menerapkan perubahan'
             : ''}
         </span>
-        <button disabled={!active} onClick={() => void reconnect()}>
+        <button
+          disabled={!active || schemaBusyTabId !== null}
+          onClick={() => void reconnect()}
+        >
           Reconnect
         </button>
         <span className="toolbar-spacer" />
@@ -1616,6 +1725,44 @@ function Workbench({ transport }: { transport: DatabaseTransport }) {
           }
         />
       ) : null}
+      {schemaCreateContext ? (
+        <div className="overlay">
+          <section
+            className="dialog schema-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Kelola schema ${schemaCreateContext.schema ?? schemaCreateContext.database}`}
+          >
+            <header>
+              <h2>Kelola schema</h2>
+              <button
+                aria-label="Tutup dialog schema"
+                disabled={schemaCreateBusy}
+                onClick={() => {
+                  setSchemaCreateBusy(false);
+                  setSchemaCreateContext(null);
+                }}
+              >
+                Tutup
+              </button>
+            </header>
+            <SchemaManager
+              transport={transport}
+              connectionId={schemaCreateContext.connectionId}
+              connectionRevision={schemaCreateContext.revision}
+              createContext={schemaCreateContext}
+              onBusyChange={setSchemaCreateBusy}
+              onApplied={async () => {
+                setSchemaCreateBusy(false);
+                await query.invalidateQueries({
+                  predicate: (candidate) => metadataQuery(candidate.queryKey),
+                });
+                setSchemaCreateContext(null);
+              }}
+            />
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1629,6 +1776,8 @@ function Inspector({
   attach,
   onError,
   onNames,
+  onSchemaApplied,
+  onSchemaBusyChange,
 }: {
   tab: Tab;
   profile: Profile;
@@ -1638,6 +1787,12 @@ function Inspector({
   attach: (tab: Tab, id: string, session: Session) => Promise<void>;
   onError: (e: unknown) => void;
   onNames: (names: string[]) => void;
+  onSchemaApplied: (
+    tab: Tab,
+    operation: SchemaOperation,
+    target?: ObjectId,
+  ) => Promise<void>;
+  onSchemaBusyChange: (busy: boolean) => void;
 }) {
   const [section, setSection] = useState('Columns');
   const [editing, setEditing] = useState(false);
@@ -1646,6 +1801,7 @@ function Inspector({
   const [sort, setSort] = useState('');
   const [descending, setDescending] = useState(false);
   const [column, setColumn] = useState('');
+  const [schemaBusy, setSchemaBusy] = useState(false);
   const [filter, setFilter] = useState('');
   const metadata = useQuery({
     queryKey: inspectKey(profile, tab.object!),
@@ -1673,6 +1829,19 @@ function Inspector({
     (transport.capabilities?.execute ?? true) &&
     editMetadata?.transactional === true &&
     Boolean(editMetadata.primary_key.length);
+  const canManageSchema =
+    transport.capabilities?.platform === 'desktop' &&
+    transport.capabilities.execute &&
+    tab.object!.kind === 'Table';
+  const sections = [
+    'Data',
+    'Columns',
+    'Indexes',
+    'Constraints',
+    'Foreign Keys',
+    'DDL',
+  ];
+  if (canManageSchema) sections.push('Structure');
   const data = async (next = offset, sortColumn = sort, desc = descending) => {
     try {
       const current =
@@ -1723,17 +1892,10 @@ function Inspector({
         </button>
       </header>
       <nav className="inspector-tabs">
-        {[
-          'Data',
-          'Columns',
-          'Indexes',
-          'Constraints',
-          'Foreign Keys',
-          'DDL',
-        ].map((name) => (
+        {sections.map((name) => (
           <button
+            disabled={schemaBusy || (name === 'Data' && !queryable)}
             key={name}
-            disabled={name === 'Data' && !queryable}
             className={section === name ? 'selected' : ''}
             onClick={() => {
               if (editing && name !== 'Data') {
@@ -1752,11 +1914,11 @@ function Inspector({
           </button>
         ))}
       </nav>
-      {metadata.error ? (
+      {metadata.error && section !== 'Structure' ? (
         <p role="alert" className="error-text">
           {describeError(metadata.error)}
         </p>
-      ) : metadata.isPending ? (
+      ) : metadata.isPending && section !== 'Structure' ? (
         <p className="muted">Memuat definisi…</p>
       ) : section === 'Data' && editing ? (
         <TableEditor
@@ -1764,11 +1926,16 @@ function Inspector({
           connection={profile.id}
           object={tab.object!}
           tabId={tab.id}
-          onExit={() =>
-            void discardEditDrafts(transport, tab.id).then((ok) => {
-              if (ok) setEditing(false);
-            })
-          }
+          onExit={() => {
+            const applied = ['Applied', 'AppliedNeedsRefresh'].includes(
+              useEditDrafts.getState().drafts[tab.id]?.state ?? '',
+            );
+            void discardEditDrafts(transport, tab.id).then(async (ok) => {
+              if (!ok) return;
+              setEditing(false);
+              if (applied) await data(0);
+            });
+          }}
         />
       ) : section === 'Data' ? (
         <>
@@ -1790,7 +1957,7 @@ function Inspector({
               onChange={(e) => setColumn(e.target.value)}
             >
               <option value="">Pilih kolom filter</option>
-              {metadata.data.columns.map((c) => (
+              {(metadata.data?.columns ?? []).map((c) => (
                 <option key={c.name}>{c.name}</option>
               ))}
             </select>
@@ -1802,10 +1969,7 @@ function Inspector({
             />
             <button onClick={() => void data(0)}>Terapkan / Refresh</button>
             {editable ? (
-              <button
-                className="primary"
-                onClick={() => setEditing(true)}
-              >
+              <button className="primary" onClick={() => setEditing(true)}>
                 Edit table
               </button>
             ) : null}
@@ -1845,11 +2009,43 @@ function Inspector({
             <p className="error-text">{tab.execution.error.message}</p>
           ) : null}
         </>
+      ) : section === 'Structure' && canManageSchema ? (
+        <>
+          {metadata.error ? (
+            <p role="alert" className="error-text">
+              {describeError(metadata.error)}
+            </p>
+          ) : null}
+          <SchemaManager
+            transport={transport}
+            connectionId={profile.id}
+            connectionRevision={profile.revision}
+            table={tab.object!}
+            onBusyChange={(busy) => {
+              setSchemaBusy(busy);
+              onSchemaBusyChange(busy);
+            }}
+            onApplied={async (operation, target) => {
+              if (operation.type === 'drop_table') {
+                try {
+                  await onSchemaApplied(tab, operation, target);
+                } finally {
+                  setSchemaBusy(false);
+                  onSchemaBusyChange(false);
+                }
+                return;
+              }
+              await onSchemaApplied(tab, operation, target);
+              await metadata.refetch();
+              await data(0);
+            }}
+          />
+        </>
       ) : section === 'DDL' ? (
         <DefinitionText
           transport={transport}
           text={
-            metadata.data.ddl ?? 'Definisi tidak tersedia untuk object ini.'
+            metadata.data?.ddl ?? 'Definisi tidak tersedia untuk object ini.'
           }
         />
       ) : (
@@ -1881,7 +2077,7 @@ function Inspector({
             </thead>
             <tbody>
               {section === 'Columns'
-                ? metadata.data.columns.map((c) => (
+                ? (metadata.data?.columns ?? []).map((c) => (
                     <tr key={c.name}>
                       <td>{c.name}</td>
                       <td>{c.data_type}</td>
@@ -1890,14 +2086,14 @@ function Inspector({
                     </tr>
                   ))
                 : section === 'Indexes'
-                  ? metadata.data.indexes.map((i) => (
+                  ? (metadata.data?.indexes ?? []).map((i) => (
                       <tr key={i.name}>
                         <td>{i.name}</td>
                         <td>{i.unique ? 'Yes' : 'No'}</td>
                         <td>{i.definition}</td>
                       </tr>
                     ))
-                  : metadata.data.constraints
+                  : (metadata.data?.constraints ?? [])
                       .filter(
                         (c) =>
                           section !== 'Foreign Keys' ||

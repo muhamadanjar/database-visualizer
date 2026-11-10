@@ -1,14 +1,14 @@
 # Rencana Fase
 
-Phase 1 telah divalidasi lokal; Phase 2–4 berjalan; Phase 5 belum dimulai. Lihat bukti dan keterbatasan pada masing-masing plan.
+Phase 1 telah divalidasi lokal; Phase 2–4 berjalan; Phase 5 berjalan pada desain, implementasi belum dimulai. Lihat bukti dan keterbatasan pada masing-masing plan.
 
-| Fase | Plan | Dependensi | Status |
-|---|---|---|---|
-| 1 — Foundation | [Checklist rinci](phase-1-foundation.md) | Review desain Foundation dan penyelesaian keputusan penghambat | Selesai |
-| 2 — Desktop MVP | [Milestone desktop](phase-2-desktop-mvp.md) | Acceptance criteria Phase 1 lulus | Berjalan |
-| 3 — Web MVP | [Milestone web](phase-3-web-mvp.md) | Core/UI bersama dan regresi desktop; [desain Approved](../design-docs/2026-10-10-web-mvp.md) | Berjalan |
-| 4 — Productivity | [Milestone produktivitas](phase-4-productivity.md) | Desain boleh berjalan; Desktop/Web MVP tervalidasi untuk release | Berjalan; [Approved](../design-docs/2026-10-10-productivity.md), [validasi](phase-4-productivity-validation.md) tersedia |
-| 5 — Advanced Database IDE | [Roadmap lanjutan](phase-5-advanced-ide.md) | Evaluasi kebutuhan setelah Phase 4 | Belum dimulai; future scope |
+| Fase                      | Plan                                               | Dependensi                                                                                   | Status                                                                                                                   |
+| ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 1 — Foundation            | [Checklist rinci](phase-1-foundation.md)           | Review desain Foundation dan penyelesaian keputusan penghambat                               | Selesai                                                                                                                  |
+| 2 — Desktop MVP           | [Milestone desktop](phase-2-desktop-mvp.md)        | Acceptance criteria Phase 1 lulus                                                            | Berjalan                                                                                                                 |
+| 3 — Web MVP               | [Milestone web](phase-3-web-mvp.md)                | Core/UI bersama dan regresi desktop; [desain Approved](../design-docs/2026-10-10-web-mvp.md) | Berjalan                                                                                                                 |
+| 4 — Productivity          | [Milestone produktivitas](phase-4-productivity.md) | Desain boleh berjalan; Desktop/Web MVP tervalidasi untuk release                             | Berjalan; [Approved](../design-docs/2026-10-10-productivity.md), [validasi](phase-4-productivity-validation.md) tersedia |
+| 5 — Advanced Database IDE | [Roadmap lanjutan](phase-5-advanced-ide.md)        | Review desain; gate Phase 2–4 tetap berlaku untuk release                                    | Berjalan — desain [ER diagram Draft](../design-docs/2026-10-12-phase-5-er-diagram.md); implementasi belum dimulai        |
 
 ## Aturan checklist
 

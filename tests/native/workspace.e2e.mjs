@@ -271,8 +271,27 @@ describe('Native desktop with real database adapters', () => {
         'Completed',
       );
       await request('close_execution', { execution_id: setup.execution_id });
+      const createdTables = await request('metadata', {
+        connection_id: profile.id,
+        request: {
+          Objects: {
+            schema: engine === 'Postgres' ? 'public' : null,
+            kind: 'Table',
+          },
+        },
+      });
+      assert(
+        createdTables.objects.some((item) => item.name === table),
+        'created test table is absent from metadata',
+      );
+      await $('[aria-label="Refresh metadata"]').click();
       if (engine === 'Postgres') await $('button.schema-line*=public').click();
       await $('button*=Tables').click();
+      try {
+        await $(`button=${table}`).waitForExist({ timeout: 10000 });
+      } catch (error) {
+        throw new Error(`${error}; page=${await $('body').getText()}`);
+      }
       await $(`button=${table}`).click();
       await expect($('.definition-table')).toHaveText(
         expect.stringContaining('label'),
@@ -284,6 +303,88 @@ describe('Native desktop with real database adapters', () => {
       await $('button=Data').click();
       await expect($('.grid-tools')).toHaveText(
         expect.stringContaining('2 rows'),
+      );
+      await $('button=Edit table').click();
+      await $('button=Tambah baris').waitForExist();
+      await $('[aria-label="label baris 1"]').setValue('inline-updated');
+      await $(
+        '.table-editor .definition-table tbody tr:nth-child(2) button',
+      ).click();
+      await $('button=Tambah baris').click();
+      await $('[aria-label="id baru 1"]').setValue('3');
+      await $('[aria-label="label baru 1"]').setValue('third');
+      await $('button=Preview').click();
+      await expect($('.table-editor .ddl')).toHaveText(
+        expect.stringContaining('UPDATE'),
+      );
+      await browser.execute(() => {
+        window.confirm = () => true;
+      });
+      await $('button=Apply').click();
+      await browser.waitUntil(
+        async () =>
+          (await $('.table-editor .table-controls').getText()).includes(
+            'Applied',
+          ),
+        { timeout: 30000, timeoutMsg: 'Inline edits did not apply' },
+      );
+      await $('button=Kembali ke Data').click();
+      try {
+        await $('[role="grid"]').waitForExist({
+          timeout: 20000,
+          timeoutMsg: 'Refreshed table data did not appear after inline Apply',
+        });
+      } catch (error) {
+        throw new Error(`${error}; page=${await $('body').getText()}`);
+      }
+      await expect($('[role="grid"]')).toHaveText(
+        expect.stringContaining('inline-updated'),
+      );
+      await expect($('[role="grid"]')).toHaveText(
+        expect.stringContaining('third'),
+      );
+      await expect($('[role="grid"]')).not.toHaveText(
+        expect.stringContaining('second'),
+      );
+      const tableObject = {
+        engine,
+        database: 'studio_test',
+        schema: engine === 'Postgres' ? 'public' : null,
+        name: table,
+        kind: 'Table',
+      };
+      const inspectTable = () =>
+        request('metadata', {
+          connection_id: profile.id,
+          request: { Inspect: { object: tableObject } },
+        });
+      await $('button=Structure').click();
+      await $('[aria-label="Kolom baru nama"]').setValue('extra_note');
+      await $('button=Preview SQL').click();
+      await expect($('[aria-label="SQL preview"]')).toHaveText(
+        expect.stringContaining('ALTER TABLE'),
+      );
+      const tableMetadata = await inspectTable();
+      assert.equal(
+        tableMetadata.columns.some((column) => column.name === 'extra_note'),
+        false,
+      );
+      await $('button=Apply').click();
+      await browser.waitUntil(
+        async () =>
+          (await inspectTable()).columns.some(
+            (column) => column.name === 'extra_note',
+          ),
+        { timeout: 30000, timeoutMsg: 'Add-column DDL did not apply' },
+      );
+      await browser.waitUntil(async () => await $('button=Data').isEnabled(), {
+        timeout: 30000,
+        timeoutMsg: 'Schema apply did not finish refreshing the Inspector',
+      });
+      await $('button=Data').click();
+      await browser.waitUntil(
+        async () => await $('[aria-label="Pilih row 1"]').isExisting(),
+        { timeout: 10000, timeoutMsg: 'Refreshed data rows did not appear' },
       );
 
       await $('button[aria-label="Pilih row 1"]').click();
@@ -413,7 +514,74 @@ describe('Native desktop with real database adapters', () => {
             rewatch_events: next.length,
           }),
         );
-        await request('close_execution', { execution_id: slow.execution_id });
+        const closedConsumer = await request('execute', {
+          session_id: slowSession.id,
+          sql: 'SELECT pg_sleep(90)',
+        });
+        await browser.execute(
+          (executionId) =>
+            globalThis.__DATABASE_STUDIO_WATCH_NO_ACK__(
+              executionId,
+              '__PHASE2_CLOSED_CONSUMER_EVENTS__',
+            ),
+          closedConsumer.execution_id,
+        );
+        await browser.waitUntil(
+          async () =>
+            (await browser.tauri.execute(
+              () => globalThis.__PHASE2_CLOSED_CONSUMER_EVENTS__.length,
+            )) === 1,
+          {
+            timeout: 5000,
+            timeoutMsg: 'Consumer-close watch event not delivered',
+          },
+        );
+        await browser.refresh();
+        await browser.waitUntil(
+          async () =>
+            (
+              await request('execution', {
+                execution_id: closedConsumer.execution_id,
+              })
+            ).status === 'Cancelled',
+          {
+            timeout: 40000,
+            timeoutMsg:
+              'Closed consumer did not trigger execution cancellation',
+          },
+        );
+        await browser.execute(
+          (executionId) =>
+            globalThis.__DATABASE_STUDIO_WATCH_NO_ACK__(
+              executionId,
+              '__PHASE2_CLOSED_CONSUMER_REWATCH__',
+            ),
+          closedConsumer.execution_id,
+        );
+        await browser.waitUntil(
+          async () =>
+            (await browser.tauri.execute(
+              () => globalThis.__PHASE2_CLOSED_CONSUMER_REWATCH__.length,
+            )) === 1,
+          {
+            timeout: 5000,
+            timeoutMsg: 'Terminal state unavailable after consumer close',
+          },
+        );
+        const consumerTerminal = await browser.tauri.execute(
+          () => globalThis.__PHASE2_CLOSED_CONSUMER_REWATCH__[0],
+        );
+        assert.equal(consumerTerminal.status, 'Cancelled');
+        console.log(
+          'CONSUMER_CLOSE',
+          JSON.stringify({
+            terminal_status: consumerTerminal.status,
+            rewatch_events: 1,
+          }),
+        );
+        await request('close_execution', {
+          execution_id: closedConsumer.execution_id,
+        });
         await request('disconnect', {
           session_id: slowSession.id,
           force: true,

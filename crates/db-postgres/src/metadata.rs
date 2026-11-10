@@ -132,7 +132,7 @@ WHEN t.typtype='m' THEN (SELECT format('-- Multirange %I.%I is created by range 
 END FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=$1 AND t.typname=$2"#).bind(schema).bind(&object.name).fetch_optional(&mut *connection).await.map_err(map_error)?;
                 return Ok(response);
             }
-            let columns=sqlx::query("SELECT a.attname AS column_name,pg_catalog.format_type(a.atttypid,a.atttypmod) AS data_type,CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,pg_get_expr(d.adbin,d.adrelid) AS column_default,a.attnum::bigint AS ordinal FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum").bind(schema).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
+            let columns=sqlx::query("SELECT a.attname AS column_name,pg_catalog.format_type(a.atttypid,a.atttypmod) AS data_type,CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,pg_get_expr(d.adbin,d.adrelid) AS column_default,a.attnum::bigint AS ordinal,CASE WHEN a.attcollation<>ty.typcollation THEN format('%I.%I',cn.nspname,coll.collname) END AS column_collation FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type ty ON ty.oid=a.atttypid LEFT JOIN pg_collation coll ON coll.oid=a.attcollation LEFT JOIN pg_namespace cn ON cn.oid=coll.collnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum").bind(schema).bind(&object.name).fetch_all(&mut *connection).await.map_err(map_error)?;
             for row in columns {
                 response.columns.push(ColumnMetadata {
                     name: row.try_get("column_name").map_err(map_error)?,
@@ -140,6 +140,10 @@ END FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=$
                     nullable: row.try_get::<String, _>("is_nullable").map_err(map_error)? == "YES",
                     default: row.try_get("column_default").map_err(map_error)?,
                     ordinal: row.try_get("ordinal").map_err(map_error)?,
+                    comment: None,
+                    extra: None,
+                    character_set: None,
+                    collation: row.try_get("column_collation").map_err(map_error)?,
                 });
             }
             if object.kind == ObjectKind::Table {

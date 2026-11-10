@@ -70,3 +70,17 @@ Status tetap **Berjalan**. Stress slow ACK native kini lulus di Linux, tetapi co
 - Native smoke penggunaan OS credential store melakukan restart PostgreSQL dan memulihkan profil serta password. Probe `credential_probe` membuka ulang persistence, membaca secret OS, menghapus credential dan memastikan pembacaan berikutnya hilang. Tidak ada bukti locked store di Windows/macOS atau pemulihan semua kombinasi SQLite/OS store.
 - Pipeline matrix belum dapat dijalankan; workflow meminta self-hosted desktop runner interaktif `database-studio-native` dengan keyring unlocked. GitHub CLI API gagal autentikasi (`401`), sehingga ketersediaan runner dan hasil CI tidak diketahui.
 - Paket debug `.deb` amd64 berhasil dibangun dari default non-automation configuration; `dpkg-deb --info` mengenali package `database-studio`, version `0.1.0`, architecture `amd64`. Bundle frontend production tidak mengandung `__DATABASE_STUDIO_WATCH_NO_ACK__`, `__wdio_invoke`, atau `@wdio/tauri-plugin`. Paket tidak dipasang atau dijalankan, dan bukan signing/release proof.
+
+## Consumer-close native E2E — bukti run sebelumnya, 2026-11-09
+
+- `pnpm test:native` lulus di Linux/Arch dengan WebKitGTK 605.1.15 dan PostgreSQL/MySQL nyata. Hasil native mencakup dua skenario engine dan dua restart tests; harness membangun app debug dengan automation feature, bukan paket `.deb`.
+- E2E PostgreSQL menjalankan query lambat, memasang watcher tanpa ACK, lalu me-reload WebView untuk menutup consumer. Watchdog membatalkan query; query teramati berstatus `Cancelled`; watcher baru mengambil event terminal. Bukti log: `CONSUMER_CLOSE {"terminal_status":"Cancelled","rewatch_events":1}`.
+- Ini membuktikan teardown/consumer kehilangan ACK dan pemulihan terminal pada konfigurasi Linux ini; tidak membuktikan perilaku macOS/Windows atau jalur send-error spesifik di semua platform. macOS sengaja tidak diuji dari lingkungan Linux. Idle whole-process RSS pada run: 424.644 KiB; startup tidak terukur.
+
+- Run sebelumnya setelah perubahan productivity, 2026-11-09: fase native awal lulus pada PostgreSQL dan MySQL; fase restart berhenti sebelum skenario dimulai karena gate idle RSS tidak menghasilkan sample. Command `pnpm test:native` karena itu exit 1 dan tidak membuktikan restart pada run tersebut. Bukti consumer-close di atas berasal dari run sebelumnya. macOS dan `.deb` tidak diuji/dibangun ulang dari lingkungan Arch ini.
+
+## Validasi fitur native — 2026-11-09
+
+- `pnpm test:native` terbaru lulus pada Linux/Arch: skenario PostgreSQL dan MySQL serta dua restart tests. E2E membuktikan inline update/delete/insert dan refresh halaman setelah Apply, add-column DDL dan Inspector refresh pada kedua engine; fixture memvalidasi table metadata sebelum navigasi.
+- Run juga meluluskan ACK no-ACK cancellation (`ACK_STRESS`) dan consumer-close recovery (`CONSUMER_CLOSE`). Ini build debug dengan automation feature, bukan paket release.
+- Whole-process idle RSS: 440.684 KiB pada run awal dan 432.664 KiB setelah restart; cold startup tidak terukur. macOS dan `.deb` sengaja tidak diuji/dibangun dari Arch Linux.

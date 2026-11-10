@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DatabaseTransport, ObjectId } from '@database-studio/contracts';
 import { describeError } from '@database-studio/contracts';
 import {
@@ -29,22 +29,52 @@ export function TableEditor({
   const put = useEditDrafts((s) => s.put);
   const [readback, setReadback] = useState<EditSnapshot['rows']>([]);
   const [error, setError] = useState('');
+  const [previewing, setPreviewing] = useState(false);
   const [loading, setLoading] = useState(false);
+  const loadInFlight = useRef(false);
+  const previewInFlight = useRef(false);
+  const applyInFlight = useRef(false);
   const load = async (offset = draft?.snapshot.offset ?? 0) => {
+    if (
+      loadInFlight.current ||
+      previewInFlight.current ||
+      applyInFlight.current
+    )
+      return;
+    const current = useEditDrafts.getState().drafts[tabId];
+    if (['Applying', 'Refreshing'].includes(current?.state ?? '')) return;
+    loadInFlight.current = true;
     setLoading(true);
     setError('');
     try {
-      if (draft && !(await discardEditDrafts(transport, tabId))) return;
+      const appliedNeedsRefresh = current?.state === 'AppliedNeedsRefresh';
+      if (appliedNeedsRefresh)
+        await transport.request('edit_discard', {
+          connection_id: connection,
+          tab_id: tabId,
+        });
+      else {
+        if (current && !(await discardEditDrafts(transport, tabId))) return;
+        if (useEditDrafts.getState().drafts[tabId]) return;
+      }
       const snapshot = await transport.request<EditSnapshot>('edit_snapshot', {
         connection_id: connection,
         tab_id: tabId,
         object,
         offset,
       });
-      put(tabId, { connection, snapshot, changes: [], state: 'Draft' });
+      const latest = useEditDrafts.getState().drafts[tabId];
+      if (appliedNeedsRefresh ? latest === current : !latest)
+        put(tabId, {
+          connection,
+          snapshot,
+          changes: [],
+          state: appliedNeedsRefresh ? 'Applied' : 'Draft',
+        });
     } catch (e) {
       setError(describeError(e));
     } finally {
+      loadInFlight.current = false;
       setLoading(false);
     }
   };
@@ -52,15 +82,25 @@ export function TableEditor({
     if (!draft) void load();
   }, [connection, tabId]);
   const revise = (changes: Change[]) => {
-    if (draft)
-      put(tabId, {
-        ...draft,
-        changes,
-        preview: undefined,
-        state: 'Draft',
-        key: undefined,
-        mutation: undefined,
-      });
+    if (
+      loadInFlight.current ||
+      previewInFlight.current ||
+      applyInFlight.current ||
+      ['Applying', 'Refreshing', 'AppliedNeedsRefresh'].includes(
+        draft?.state ?? '',
+      ) ||
+      !draft ||
+      useEditDrafts.getState().drafts[tabId] !== draft
+    )
+      return;
+    put(tabId, {
+      ...draft,
+      changes,
+      preview: undefined,
+      state: 'Draft',
+      key: undefined,
+      mutation: undefined,
+    });
   };
   const cell = (row: number, name: string, value: Input) => {
     if (!draft) return;
@@ -83,13 +123,26 @@ export function TableEditor({
     ]);
   };
   const preview = async () => {
-    if (!draft) return;
+    if (
+      !draft ||
+      ['Refreshing', 'AppliedNeedsRefresh'].includes(draft.state) ||
+      loadInFlight.current ||
+      previewInFlight.current ||
+      applyInFlight.current
+    )
+      return;
+    previewInFlight.current = true;
+    setPreviewing(true);
+    setError('');
     try {
       const value = await transport.request<{
         statements: string[];
         warnings: string[];
       }>('edit_preview', {
         connection_id: connection,
+        ...(draft.snapshot.profile_revision === undefined
+          ? {}
+          : { expected_profile_revision: draft.snapshot.profile_revision }),
         tab_id: tabId,
         batch: {
           tab_id: tabId,
@@ -97,13 +150,32 @@ export function TableEditor({
           changes: draft.changes,
         },
       });
-      put(tabId, { ...draft, preview: value });
+      if (useEditDrafts.getState().drafts[tabId] === draft)
+        put(tabId, { ...draft, preview: value });
     } catch (e) {
+      const latest = useEditDrafts.getState().drafts[tabId];
+      if (
+        typeof e === 'object' &&
+        e !== null &&
+        'code' in e &&
+        e.code === 'SCHEMA_PROFILE_CHANGED'
+      ) {
+        if (latest)
+          put(tabId, { ...latest, preview: undefined, state: 'Failed' });
+      }
       setError(describeError(e));
+    } finally {
+      previewInFlight.current = false;
+      setPreviewing(false);
     }
   };
   const apply = async () => {
     if (
+      loading ||
+      loadInFlight.current ||
+      previewInFlight.current ||
+      applyInFlight.current ||
+      useEditDrafts.getState().drafts[tabId] !== draft ||
       !draft?.preview ||
       !window.confirm(
         'Terapkan ' +
@@ -113,6 +185,8 @@ export function TableEditor({
     )
       return;
     const key = crypto.randomUUID();
+    applyInFlight.current = true;
+    setLoading(true);
     put(tabId, { ...draft, key, state: 'Applying' });
     setError('');
     try {
@@ -120,6 +194,9 @@ export function TableEditor({
         'edit_apply',
         {
           connection_id: connection,
+          ...(draft.snapshot.profile_revision === undefined
+            ? {}
+            : { expected_profile_revision: draft.snapshot.profile_revision }),
           tab_id: tabId,
           idempotency_key: key,
           batch: {
@@ -141,6 +218,14 @@ export function TableEditor({
         put(tabId, { ...draft, key, mutation: result.id, state: result.state });
       }
       if (result.state === 'Applied') {
+        const refreshingDraft = {
+          ...draft,
+          key,
+          mutation: result.id,
+          state: 'Refreshing',
+          changes: [],
+        };
+        put(tabId, refreshingDraft);
         try {
           setReadback(
             await transport.request<EditSnapshot['rows']>('edit_readback', {
@@ -154,14 +239,6 @@ export function TableEditor({
             'Apply terkonfirmasi. Readback tidak tersedia; periksa data melalui query.',
           );
         }
-
-        put(tabId, {
-          ...draft,
-          key,
-          mutation: result.id,
-          state: 'Applied',
-          changes: [],
-        });
         await transport.request('edit_discard', {
           connection_id: connection,
           tab_id: tabId,
@@ -175,18 +252,46 @@ export function TableEditor({
             offset: draft.snapshot.offset,
           },
         );
-        put(tabId, { connection, snapshot, changes: [], state: 'Applied' });
+        if (useEditDrafts.getState().drafts[tabId] === refreshingDraft)
+          put(tabId, { connection, snapshot, changes: [], state: 'Applied' });
       }
     } catch (e) {
       const latest = useEditDrafts.getState().drafts[tabId];
+      if (latest?.state === 'Refreshing' && latest.key === key) {
+        put(tabId, { ...latest, state: 'AppliedNeedsRefresh' });
+        setError(
+          `Apply berhasil, tetapi snapshot edit tidak dapat dimuat: ${describeError(e)}. Refresh sebelum mengedit lagi.`,
+        );
+        return;
+      }
+      if (
+        typeof e === 'object' &&
+        e !== null &&
+        'code' in e &&
+        e.code === 'SCHEMA_PROFILE_CHANGED'
+      ) {
+        if (latest)
+          put(tabId, {
+            ...latest,
+            preview: undefined,
+            state: 'Failed',
+          });
+        setError(describeError(e));
+        return;
+      }
       if (latest && latest.state !== 'Applied')
         put(tabId, { ...latest, state: 'Unknown' });
       setError(describeError(e));
+    } finally {
+      applyInFlight.current = false;
+      setLoading(false);
     }
   };
   const locked =
     !draft ||
-    draft.state === 'Applying' ||
+    loading ||
+    previewing ||
+    ['Applying', 'Refreshing', 'AppliedNeedsRefresh'].includes(draft.state) ||
     ['Unknown', 'Conflict', 'Failed'].includes(draft.state);
   if (!draft)
     return (
@@ -203,10 +308,15 @@ export function TableEditor({
   return (
     <section className="table-editor">
       <div className="table-controls">
-        <button onClick={onExit}>Kembali ke Data</button>
+        <button
+          disabled={loading || ['Applying', 'Refreshing'].includes(draft.state)}
+          onClick={onExit}
+        >
+          Kembali ke Data
+        </button>
         <span className="toolbar-divider" />
         <button
-          disabled={loading || draft.state === 'Applying'}
+          disabled={loading || ['Applying', 'Refreshing'].includes(draft.state)}
           onClick={() => void load()}
         >
           Refresh / buang draft

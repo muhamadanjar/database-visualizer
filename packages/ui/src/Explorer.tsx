@@ -27,6 +27,7 @@ function Group({
   kind,
   onOpen,
   onNames,
+  disabled,
 }: {
   transport: DatabaseTransport;
   profile: Profile;
@@ -34,6 +35,7 @@ function Group({
   kind: ObjectKind;
   onOpen: (object: ObjectId) => void;
   onNames: (names: string[]) => void;
+  disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
@@ -61,7 +63,7 @@ function Group({
     <div className="tree-group">
       <button
         className="tree-line"
-        aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="chevron">
@@ -104,6 +106,7 @@ function Group({
                       height: item.size,
                       transform: `translateY(${item.start}px)`,
                     }}
+                    disabled={disabled}
                     title={objects[item.index].name}
                     onClick={() => onOpen(objects[item.index])}
                   >
@@ -127,26 +130,45 @@ function Schema({
   profile,
   onOpen,
   onNames,
+  onManageSchema,
+  canManageSchema,
+  disabled,
 }: {
   name: string;
   transport: DatabaseTransport;
   profile: Profile;
   onOpen: (object: ObjectId) => void;
   onNames: (names: string[]) => void;
+  onManageSchema: (schema: string) => void;
+  canManageSchema: boolean;
+  disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
-      <button
-        className="tree-line schema-line"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="chevron">
-          <Icon name="chevron" open={open} />
-        </span>
-        <Icon name="database" /> {name}
-      </button>
+      <div className="schema-tree-header">
+        <button
+          className="tree-line schema-line"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="chevron">
+            <Icon name="chevron" open={open} />
+          </span>
+          <Icon name="database" /> {name}
+        </button>
+        {canManageSchema ? (
+          <button
+            className="schema-manage"
+            aria-label={`Kelola schema ${name}`}
+            disabled={disabled}
+            onClick={() => onManageSchema(name)}
+          >
+            Struktur
+          </button>
+        ) : null}
+      </div>
       {open ? (
         <div className="schema-children">
           {Object.keys(labels).map((kind) => (
@@ -158,6 +180,7 @@ function Schema({
               kind={kind as ObjectKind}
               onOpen={onOpen}
               onNames={onNames}
+              disabled={disabled}
             />
           ))}
         </div>
@@ -170,11 +193,15 @@ export function Explorer({
   profile,
   onOpen,
   onNames,
+  onManageSchema,
+  disabled,
 }: {
   transport: DatabaseTransport;
   profile: Profile;
   onOpen: (object: ObjectId) => void;
   onNames: (names: string[]) => void;
+  onManageSchema: (schema: string | null) => void;
+  disabled: boolean;
 }) {
   const schemas = useQuery({
     queryKey: ['schemas', profile.id, profile.revision],
@@ -186,14 +213,34 @@ export function Explorer({
       }),
     staleTime: 30000,
   });
+  const canManageSchema =
+    transport.capabilities?.platform === 'desktop' &&
+    transport.capabilities.execute;
   return (
     <div className="explorer-tree">
-      <div className="tree-line database-line">
-        <span className="engine-glyph">
-          {profile.engine === 'Postgres' ? 'P' : 'M'}
-        </span>
-        <strong>{profile.database}</strong>
-      </div>
+      {profile.engine === 'MySql' && canManageSchema ? (
+        <div className="schema-tree-header">
+          <div className="tree-line database-line">
+            <span className="engine-glyph">M</span>
+            <strong>{profile.database}</strong>
+          </div>
+          <button
+            className="schema-manage"
+            aria-label={`Kelola schema ${profile.database}`}
+            disabled={disabled}
+            onClick={() => onManageSchema(null)}
+          >
+            Struktur
+          </button>
+        </div>
+      ) : (
+        <div className="tree-line database-line">
+          <span className="engine-glyph">
+            {profile.engine === 'Postgres' ? 'P' : 'M'}
+          </span>
+          <strong>{profile.database}</strong>
+        </div>
+      )}
       {profile.engine === 'Postgres' ? (
         schemas.error ? (
           <p className="small error-text">{describeError(schemas.error)}</p>
@@ -208,6 +255,9 @@ export function Explorer({
               profile={profile}
               onOpen={onOpen}
               onNames={onNames}
+              onManageSchema={(schema) => onManageSchema(schema)}
+              canManageSchema={canManageSchema}
+              disabled={disabled}
             />
           ))
         )
@@ -230,6 +280,7 @@ export function Explorer({
               kind={kind}
               onOpen={onOpen}
               onNames={onNames}
+              disabled={disabled}
             />
           ))}
         </div>

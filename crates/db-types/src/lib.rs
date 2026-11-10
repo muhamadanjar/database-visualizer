@@ -302,6 +302,14 @@ pub struct ColumnMetadata {
     pub nullable: bool,
     pub default: Option<String>,
     pub ordinal: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_set: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collation: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexMetadata {
@@ -325,6 +333,8 @@ pub struct MetadataResponse {
     pub ddl: Option<String>,
     #[serde(default)]
     pub editing: Option<EditingMetadata>,
+    #[serde(default)]
+    pub table_collation: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -344,17 +354,39 @@ pub struct DestructiveConfirmation {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SchemaOperation {
-    CreateTable { columns: Vec<SchemaColumn> },
-    RenameTable { new_name: String },
+    CreateTable {
+        columns: Vec<SchemaColumn>,
+    },
+    RenameTable {
+        new_name: String,
+    },
     DropTable,
-    AddColumn { column: SchemaColumn },
-    AlterColumn { column: SchemaColumn },
-    RenameColumn { name: String, new_name: String },
-    DropColumn { name: String },
-    CreateIndex { index: SchemaIndex },
-    DropIndex { name: String },
-    AddConstraint { constraint: SchemaConstraint },
-    DropConstraint { name: String, kind: SchemaConstraintKind },
+    AddColumn {
+        column: SchemaColumn,
+    },
+    AlterColumn {
+        column: SchemaColumn,
+    },
+    RenameColumn {
+        name: String,
+        new_name: String,
+    },
+    DropColumn {
+        name: String,
+    },
+    CreateIndex {
+        index: SchemaIndex,
+    },
+    DropIndex {
+        name: String,
+    },
+    AddConstraint {
+        constraint: SchemaConstraint,
+    },
+    DropConstraint {
+        name: String,
+        kind: SchemaConstraintKind,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -387,13 +419,29 @@ pub struct SchemaIndex {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SchemaConstraint {
-    PrimaryKey { name: String, columns: Vec<String> },
-    Unique { name: String, columns: Vec<String> },
-    ForeignKey { name: String, columns: Vec<String>, referenced_table: ObjectId, referenced_columns: Vec<String> },
-    Check { name: String, expression: String },
+    PrimaryKey {
+        name: String,
+        columns: Vec<String>,
+    },
+    Unique {
+        name: String,
+        columns: Vec<String>,
+    },
+    ForeignKey {
+        name: String,
+        columns: Vec<String>,
+        referenced_table: ObjectId,
+        referenced_columns: Vec<String>,
+    },
+    Check {
+        name: String,
+        expression: String,
+    },
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[cfg(test)]
 mod tests {
